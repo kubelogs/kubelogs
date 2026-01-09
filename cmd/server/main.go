@@ -19,9 +19,8 @@ import (
 )
 
 func main() {
-	// Configuration from environment
-	listenAddr := getEnv("KUBELOGS_LISTEN_ADDR", ":50051")
-	dbPath := getEnv("KUBELOGS_DB_PATH", "kubelogs.db")
+	// Load configuration from environment
+	cfg := server.ConfigFromEnv()
 
 	// Initialize logger
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -29,14 +28,24 @@ func main() {
 	})))
 
 	// Open SQLite store
-	store, err := sqlite.New(sqlite.Config{Path: dbPath})
+	store, err := sqlite.New(sqlite.Config{Path: cfg.DBPath})
 	if err != nil {
-		slog.Error("failed to open database", "path", dbPath, "error", err)
+		slog.Error("failed to open database", "path", cfg.DBPath, "error", err)
 		os.Exit(1)
 	}
 	defer store.Close()
 
-	slog.Info("database opened", "path", dbPath)
+	slog.Info("database opened", "path", cfg.DBPath)
+
+	// Setup context with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start retention worker (if enabled)
+	if cfg.RetentionEnabled() {
+		retentionWorker := server.NewRetentionWorker(store, cfg)
+		go retentionWorker.Run(ctx)
+	}
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer()
@@ -51,18 +60,18 @@ func main() {
 	reflection.Register(grpcServer)
 
 	// Start listening
-	lis, err := net.Listen("tcp", listenAddr)
+	lis, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
-		slog.Error("failed to listen", "address", listenAddr, "error", err)
+		slog.Error("failed to listen", "address", cfg.ListenAddr, "error", err)
 		os.Exit(1)
 	}
 
-	slog.Info("server starting", "address", listenAddr)
+	slog.Info("server starting",
+		"address", cfg.ListenAddr,
+		"retention_days", cfg.RetentionDays,
+	)
 
 	// Handle shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -82,11 +91,4 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("server stopped")
-}
-
-func getEnv(key, defaultValue string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultValue
 }
