@@ -142,7 +142,13 @@
     </header>
 
     <!-- Log entries -->
-    <main class="flex-1 overflow-auto font-mono text-sm" x-ref="logContainer">
+    <main class="flex-1 overflow-auto font-mono text-sm" x-ref="logContainer" @scroll="handleScroll($event)">
+        <!-- Loading older entries indicator -->
+        <div x-show="loadingOlder"
+             class="sticky top-0 z-10 bg-gray-800 text-center py-2 text-sm text-gray-400 border-b border-gray-700">
+            <span class="animate-pulse">Loading older entries...</span>
+        </div>
+
         <table class="w-full">
             <thead class="sticky top-0 bg-gray-800 text-gray-400 text-xs uppercase">
                 <tr>
@@ -186,6 +192,24 @@
         Reconnecting...
     </div>
 
+    <!-- Jump to now button -->
+    <div x-show="!tailing && entries.length > 0"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-4"
+         x-transition:enter-end="opacity-100 translate-y-0"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 translate-y-0"
+         x-transition:leave-end="opacity-0 translate-y-4"
+         class="fixed bottom-4 left-1/2 transform -translate-x-1/2 z-10">
+        <button @click="toggleTail()"
+                class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-full shadow-lg text-sm font-medium transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path>
+            </svg>
+            Jump to now
+        </button>
+    </div>
+
     <!-- Keyboard shortcuts modal -->
     <div x-show="showShortcuts"
          x-transition:enter="transition ease-out duration-200"
@@ -217,6 +241,9 @@
 
                 <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">G</kbd></dt>
                 <dd class="text-gray-400">Go to bottom</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">u</kbd></dt>
+                <dd class="text-gray-400">Load older entries</dd>
 
                 <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">1-6</kbd></dt>
                 <dd class="text-gray-400">Set severity filter</dd>

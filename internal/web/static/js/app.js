@@ -19,6 +19,9 @@ function app() {
             diskSizeBytes: 0
         },
         maxEntries: 1000,
+        oldestLoadedId: null,    // Cursor for backward pagination
+        hasMoreOlder: true,      // Whether more historical entries exist
+        loadingOlder: false,     // Prevent concurrent requests
 
         init() {
             this.loadFilters();
@@ -78,9 +81,18 @@ function app() {
                 const entry = JSON.parse(e.data);
                 this.entries.push(entry);
 
-                // Keep max entries in memory
+                // Track oldest loaded ID for backward pagination
+                if (this.oldestLoadedId === null || entry.id < this.oldestLoadedId) {
+                    this.oldestLoadedId = entry.id;
+                }
+
+                // Keep max entries in memory (trim oldest when tailing)
                 while (this.entries.length > this.maxEntries) {
-                    this.entries.shift();
+                    const removed = this.entries.shift();
+                    // Update oldest ID when removing from front
+                    if (this.entries.length > 0) {
+                        this.oldestLoadedId = this.entries[0].id;
+                    }
                 }
 
                 // Auto-scroll if tailing
@@ -117,11 +129,95 @@ function app() {
 
         applyFilters() {
             this.entries = [];
+            this.oldestLoadedId = null;
+            this.hasMoreOlder = true;
+            this.loadingOlder = false;
             this.startTailing();
         },
 
         clearLogs() {
             this.entries = [];
+            this.oldestLoadedId = null;
+            this.hasMoreOlder = true;
+        },
+
+        async loadOlderEntries() {
+            if (this.loadingOlder || !this.hasMoreOlder || this.entries.length === 0) {
+                return;
+            }
+
+            this.loadingOlder = true;
+
+            // Build query params matching current filters
+            const params = new URLSearchParams();
+            if (this.filters.namespace) params.set('namespace', this.filters.namespace);
+            if (this.filters.container) params.set('container', this.filters.container);
+            if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
+            if (this.filters.search) params.set('search', this.filters.search);
+            if (this.filters.timeSpan > 0) {
+                const startTime = new Date(Date.now() - this.filters.timeSpan * 60 * 1000);
+                params.set('startTime', startTime.toISOString());
+            }
+
+            // Use beforeId for backward pagination with descending order
+            params.set('beforeId', this.oldestLoadedId);
+            params.set('order', 'desc');
+            params.set('limit', '100');
+
+            try {
+                const resp = await fetch(`/api/logs?${params}`);
+                const data = await resp.json();
+
+                if (!data.entries || data.entries.length === 0) {
+                    this.hasMoreOlder = false;
+                } else {
+                    // Preserve scroll position
+                    const container = this.$refs.logContainer;
+                    const prevScrollHeight = container.scrollHeight;
+                    const prevScrollTop = container.scrollTop;
+
+                    // Prepend entries (API returns newest-first, so reverse for chronological order)
+                    const olderEntries = data.entries.reverse();
+                    this.entries = [...olderEntries, ...this.entries];
+
+                    // Update cursor to oldest entry
+                    this.oldestLoadedId = olderEntries[0].id;
+                    this.hasMoreOlder = data.hasMore;
+
+                    // Trim from end if exceeding maxEntries (remove newest when in historical mode)
+                    while (this.entries.length > this.maxEntries) {
+                        this.entries.pop();
+                    }
+
+                    // Restore scroll position after DOM update
+                    this.$nextTick(() => {
+                        const newScrollHeight = container.scrollHeight;
+                        container.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to load older entries:', err);
+            } finally {
+                this.loadingOlder = false;
+            }
+        },
+
+        handleScroll(event) {
+            const container = event.target;
+            const scrollThreshold = 200;
+
+            // Detect scroll to top for loading older entries
+            if (container.scrollTop < scrollThreshold && !this.tailing && !this.loadingOlder) {
+                this.loadOlderEntries();
+            }
+
+            // Disable tailing when user scrolls up
+            if (this.tailing) {
+                const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+                if (!isAtBottom) {
+                    this.tailing = false;
+                }
+            }
         },
 
         handleKeydown(e) {
@@ -156,6 +252,12 @@ function app() {
                     e.preventDefault();
                     this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
                     this.tailing = true;
+                    break;
+                case 'u':
+                    e.preventDefault();
+                    if (!this.tailing) {
+                        this.loadOlderEntries();
+                    }
                     break;
                 case '1':
                 case '2':
