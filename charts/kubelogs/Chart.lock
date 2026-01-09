@@ -1,0 +1,9 @@
+dependencies:
+- name: collector
+  repository: file://./charts/collector
+  version: 0.1.0
+- name: server
+  repository: file://./charts/server
+  version: 0.1.0
+digest: sha256:92a34a2ce4afb7a785ef021f38b6cdecb238b8309036d7c170cb1b56fd8871bc
+generated: "2026-01-09T17:17:16.644053Z"

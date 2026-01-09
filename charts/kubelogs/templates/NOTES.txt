@@ -1,0 +1,36 @@
+kubelogs has been installed!
+
+{{- if .Values.server.enabled }}
+
+Server:
+  The storage server is running at {{ .Release.Name }}-server:{{ .Values.server.service.port }}
+
+  To check server status:
+    kubectl get pods -l app.kubernetes.io/name=server,app.kubernetes.io/instance={{ .Release.Name }}
+
+  To view server logs:
+    kubectl logs -l app.kubernetes.io/name=server,app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- end }}
+
+{{- if .Values.collector.enabled }}
+
+Collector:
+  The collector DaemonSet is running on all nodes.
+
+  To check collector status:
+    kubectl get pods -l app.kubernetes.io/name=collector,app.kubernetes.io/instance={{ .Release.Name }}
+
+  To view collector logs on a specific node:
+    kubectl logs -l app.kubernetes.io/name=collector,app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- end }}
+
+{{- if and .Values.collector.enabled .Values.collector.standaloneMode }}
+
+Note: Collector is running in STANDALONE MODE with local SQLite storage.
+Each node stores its own logs independently.
+
+{{- end }}
+
+For more information, visit: https://github.com/kubelogs/kubelogs

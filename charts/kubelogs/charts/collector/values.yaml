@@ -1,0 +1,57 @@
+enabled: true
+standaloneMode: false
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+storage:
+  remoteAddr: ""
+  localDbPath: "/data/kubelogs.db"
+
+env:
+  maxStreams: 100
+  batchSize: 500
+  batchTimeout: "5s"
+  streamBuffer: 1000
+  excludeNamespaces: "kube-system"
+  includeNamespaces: ""
+  shutdownTimeout: "30s"
+
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "100m"
+  limits:
+    memory: "256Mi"
+    cpu: "500m"
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext: {}
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  readOnlyRootFilesystem: true
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+standalonePersistence:
+  enabled: false
+  hostPath: "/var/lib/kubelogs"

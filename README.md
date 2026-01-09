@@ -27,78 +27,124 @@ kubelogs is a single-binary log aggregator built for solo developers and small p
 ### Helm (recommended)
 
 ```bash
-helm repo add kubelogs https://kubelogs.dev/helm
-helm install kubelogs kubelogs/kubelogs
+# Install from the charts directory
+helm install kubelogs ./charts/kubelogs
+
+# Or from OCI registry (coming soon)
+helm install kubelogs oci://ghcr.io/kubelogs/charts/kubelogs
 ```
 
-### kubectl
+### Verify Installation
 
 ```bash
-kubectl apply -f https://kubelogs.dev/install.yaml
+# Check that pods are running
+kubectl get pods -l app.kubernetes.io/part-of=kubelogs
+
+# View collector logs
+kubectl logs -l app.kubernetes.io/name=collector
+
+# View server logs
+kubectl logs -l app.kubernetes.io/name=server
 ```
 
-### Access the UI
-
-```bash
-kubectl port-forward svc/kubelogs 8080:80
-open http://localhost:8080
-```
-
-That's it. You should see logs flowing within seconds.
-
-## Screenshots
-
-*Coming soon*
-
-## Configuration
+## Helm Configuration
 
 kubelogs works out of the box with sensible defaults. For customization, create a `values.yaml`:
 
 ```yaml
-# Storage
-storage:
-  type: embedded          # embedded | s3
-  retention: 7d           # how long to keep logs
-  
-# Resources
-resources:
-  requests:
-    memory: 128Mi
-    cpu: 100m
-  limits:
-    memory: 256Mi
-    cpu: 500m
+global:
+  imageRegistry: ghcr.io
+  imageOwner: kubelogs
 
-# Ingress (optional)
-ingress:
-  enabled: false
-  hostname: logs.example.com
+# Server: centralized storage service
+server:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 1000m
+
+# Collector: DaemonSet on each node
+collector:
+  enabled: true
+  env:
+    excludeNamespaces: "kube-system"  # namespaces to skip
+    maxStreams: 100                    # concurrent log streams per node
+    batchSize: 500                     # entries before flush
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 500m
 ```
 
 ```bash
-helm install kubelogs kubelogs/kubelogs -f values.yaml
+helm install kubelogs ./charts/kubelogs -f values.yaml
+```
+
+### Common Configurations
+
+**Collect logs from all namespaces (including kube-system):**
+```bash
+helm install kubelogs ./charts/kubelogs \
+  --set collector.env.excludeNamespaces=""
+```
+
+**Only collect from specific namespaces:**
+```bash
+helm install kubelogs ./charts/kubelogs \
+  --set collector.env.includeNamespaces="default,production"
+```
+
+**Run on all nodes (including control plane):**
+```bash
+helm install kubelogs ./charts/kubelogs \
+  --set collector.tolerations[0].operator=Exists
+```
+
+**Standalone mode (local SQLite, no server):**
+```bash
+helm install kubelogs ./charts/kubelogs \
+  --set server.enabled=false \
+  --set collector.standaloneMode=true
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│                   kubelogs                      │
-├───────────────┬───────────────┬─────────────────┤
-│   Collector   │    Store      │     Web UI      │
-│  (DaemonSet)  │  (embedded)   │   (built-in)    │
-└───────────────┴───────────────┴─────────────────┘
-                       │
-          ┌────────────┴────────────┐
-          ▼                         ▼
-    DuckDB (small)           S3 (scale)
+┌──────────────────────────────────────────────────────────┐
+│                     Kubernetes Cluster                    │
+├───────────────────────────────────────────────────────────┤
+│                                                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │  Collector  │  │  Collector  │  │  Collector  │       │
+│  │ (DaemonSet) │  │ (DaemonSet) │  │ (DaemonSet) │       │
+│  │   Node 1    │  │   Node 2    │  │   Node 3    │       │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │
+│         │                │                │               │
+│         └────────────────┼────────────────┘               │
+│                          │ gRPC                           │
+│                          ▼                                │
+│                   ┌─────────────┐                         │
+│                   │   Server    │                         │
+│                   │ (Deployment)│                         │
+│                   │  + SQLite   │                         │
+│                   └─────────────┘                         │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
 ```
 
-**Collector**: Lightweight DaemonSet that tails container logs via the Kubernetes API. Also accepts OTLP and Fluent Forward protocols.
+**Collector** (DaemonSet): Runs on every node, tails container logs via Kubernetes API, and streams them to the server over gRPC.
 
-**Store**: Embedded DuckDB for clusters up to ~10GB/day. Switch to S3-compatible storage for larger volumes.
-
-**Web UI**: Built-in interface for searching and filtering logs. No external dependencies.
+**Server** (Deployment): Centralized storage service with embedded SQLite and full-text search. Receives logs from all collectors.
 
 ## Resource Usage
 

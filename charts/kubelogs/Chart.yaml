@@ -1,0 +1,22 @@
+apiVersion: v2
+name: kubelogs
+description: A lightweight log aggregator for Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - logging
+  - kubernetes
+  - observability
+home: https://github.com/kubelogs/kubelogs
+maintainers:
+  - name: kubelogs
+dependencies:
+  - name: collector
+    version: "0.1.0"
+    repository: "file://./charts/collector"
+    condition: collector.enabled
+  - name: server
+    version: "0.1.0"
+    repository: "file://./charts/server"
+    condition: server.enabled

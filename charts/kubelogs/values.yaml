@@ -1,0 +1,135 @@
+# Global values inherited by all subcharts
+global:
+  # Image registry for all kubelogs images
+  imageRegistry: ghcr.io
+  # Image repository owner
+  imageOwner: kubelogs
+  # Image pull policy
+  imagePullPolicy: IfNotPresent
+  # Image pull secrets
+  imagePullSecrets: []
+
+# Server subchart configuration
+server:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: ""
+    tag: ""
+
+  service:
+    type: ClusterIP
+    port: 50051
+
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    existingClaim: ""
+
+  env:
+    listenAddr: ":50051"
+    dbPath: "/data/kubelogs.db"
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+
+  probes:
+    liveness:
+      enabled: true
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 3
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  podSecurityContext:
+    fsGroup: 65534
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    readOnlyRootFilesystem: true
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# Collector subchart configuration
+collector:
+  enabled: true
+  # Standalone mode uses local SQLite instead of remote server
+  standaloneMode: false
+
+  image:
+    repository: ""
+    tag: ""
+
+  storage:
+    # Remote server address (auto-configured if empty and server.enabled)
+    remoteAddr: ""
+    # Local database path (only used in standalone mode)
+    localDbPath: "/data/kubelogs.db"
+
+  env:
+    maxStreams: 100
+    batchSize: 500
+    batchTimeout: "5s"
+    streamBuffer: 1000
+    excludeNamespaces: "kube-system"
+    includeNamespaces: ""
+    shutdownTimeout: "30s"
+
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+
+  rbac:
+    create: true
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+
+  podSecurityContext: {}
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    readOnlyRootFilesystem: true
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+
+  standalonePersistence:
+    enabled: false
+    hostPath: "/var/lib/kubelogs"
