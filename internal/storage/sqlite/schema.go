@@ -52,4 +52,5 @@ PRAGMA synchronous = NORMAL;
 PRAGMA cache_size = -64000;
 PRAGMA temp_store = MEMORY;
 PRAGMA mmap_size = 268435456;
+PRAGMA busy_timeout = 5000;
 `

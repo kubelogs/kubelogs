@@ -2,6 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,5 +147,133 @@ func TestCombinedFilters(t *testing.T) {
 	}
 	if len(result.Entries) != 1 {
 		t.Errorf("Combined filter returned %d entries, want 1", len(result.Entries))
+	}
+}
+
+func TestConcurrentWrites(t *testing.T) {
+	// Use file-based DB to properly test locking behavior
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := New(Config{Path: dbPath, WriteBufferSize: 10})
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	const numGoroutines = 10
+	const writesPerGoroutine = 100
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < writesPerGoroutine; j++ {
+				entries := storage.LogBatch{
+					{
+						Timestamp: time.Now(),
+						Namespace: fmt.Sprintf("ns-%d", goroutineID),
+						Pod:       fmt.Sprintf("pod-%d-%d", goroutineID, j),
+						Container: "container",
+						Severity:  storage.SeverityInfo,
+						Message:   fmt.Sprintf("message from goroutine %d, write %d", goroutineID, j),
+					},
+				}
+				if _, err := store.Write(ctx, entries); err != nil {
+					errCh <- fmt.Errorf("goroutine %d write %d: %w", goroutineID, j, err)
+					return
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("Concurrent write error: %v", err)
+	}
+
+	// Final flush
+	if err := store.Flush(ctx); err != nil {
+		t.Fatalf("Final flush failed: %v", err)
+	}
+
+	// Verify all entries were written
+	stats, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+
+	expected := int64(numGoroutines * writesPerGoroutine)
+	if stats.TotalEntries != expected {
+		t.Errorf("Expected %d entries, got %d", expected, stats.TotalEntries)
+	}
+}
+
+func TestConcurrentWritesAndReads(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	store, err := New(Config{Path: dbPath, WriteBufferSize: 5})
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Pre-populate some data
+	for i := 0; i < 50; i++ {
+		store.Write(ctx, storage.LogBatch{
+			{Timestamp: time.Now(), Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "init"},
+		})
+	}
+	store.Flush(ctx)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 20)
+
+	// Writers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_, err := store.Write(ctx, storage.LogBatch{
+					{Timestamp: time.Now(), Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: fmt.Sprintf("w%d-%d", id, j)},
+				})
+				if err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}(i)
+	}
+
+	// Readers (concurrent queries should not cause SQLITE_BUSY)
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_, err := store.Query(ctx, storage.Query{Pagination: storage.Pagination{Limit: 10}})
+				if err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Errorf("Concurrent operation error: %v", err)
 	}
 }

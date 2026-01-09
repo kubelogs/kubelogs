@@ -25,9 +25,11 @@ type Store struct {
 	path   string
 	closed bool
 
-	mu     sync.Mutex
+	mu     sync.Mutex // Protects buffer and closed flag
 	buffer storage.LogBatch
 	bufCap int
+
+	writeMu sync.Mutex // Serializes SQL write transactions
 }
 
 // Config holds SQLite store configuration.
@@ -94,6 +96,7 @@ func (s *Store) Write(ctx context.Context, entries storage.LogBatch) (int, error
 
 // Flush implements storage.WriteOptimizer.
 func (s *Store) Flush(ctx context.Context) error {
+	// Step 1: Atomically swap the buffer (fast, under mu)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -107,8 +110,25 @@ func (s *Store) Flush(ctx context.Context) error {
 	s.buffer = make(storage.LogBatch, 0, s.bufCap)
 	s.mu.Unlock()
 
+	// Step 2: Serialize SQL writes (may block other flushes, but not buffer appends)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	// Check context before starting potentially slow operation
+	if err := ctx.Err(); err != nil {
+		// Re-queue batch on cancellation to avoid data loss
+		s.mu.Lock()
+		s.buffer = append(batch, s.buffer...)
+		s.mu.Unlock()
+		return err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		// Re-queue batch on failure
+		s.mu.Lock()
+		s.buffer = append(batch, s.buffer...)
+		s.mu.Unlock()
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
@@ -118,6 +138,9 @@ func (s *Store) Flush(ctx context.Context) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
+		s.mu.Lock()
+		s.buffer = append(batch, s.buffer...)
+		s.mu.Unlock()
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer stmt.Close()
@@ -140,11 +163,21 @@ func (s *Store) Flush(ctx context.Context) error {
 			attrs,
 		)
 		if err != nil {
+			s.mu.Lock()
+			s.buffer = append(batch, s.buffer...)
+			s.mu.Unlock()
 			return fmt.Errorf("insert: %w", err)
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		s.mu.Lock()
+		s.buffer = append(batch, s.buffer...)
+		s.mu.Unlock()
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	return nil
 }
 
 // SetWriteBuffer implements storage.WriteOptimizer.
@@ -262,6 +295,10 @@ func (s *Store) Delete(ctx context.Context, olderThan time.Time) (int64, error) 
 	}
 	s.mu.Unlock()
 
+	// Serialize with other writes to prevent SQLITE_BUSY
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	result, err := s.db.ExecContext(ctx, `DELETE FROM logs WHERE timestamp < ?`, olderThan.UnixNano())
 	if err != nil {
 		return 0, fmt.Errorf("delete: %w", err)
@@ -313,18 +350,21 @@ func (s *Store) Stats(ctx context.Context) (*storage.Stats, error) {
 // Close implements storage.Store.
 func (s *Store) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
+	batch := s.buffer
+	s.buffer = nil
+	s.mu.Unlock()
+
+	// Wait for any in-flight writes to complete
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	// Flush remaining buffer
-	if len(s.buffer) > 0 {
-		batch := s.buffer
-		s.buffer = nil
-
+	if len(batch) > 0 {
 		tx, err := s.db.Begin()
 		if err == nil {
 			stmt, _ := tx.Prepare(`
