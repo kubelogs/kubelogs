@@ -1,0 +1,4 @@
+bin/
+kubelogs.db
+kubelogs.db-shm
+kubelogs.db-wal
