@@ -1,0 +1,52 @@
+# Business Source License 1.1
+
+## Parameters
+
+- **Licensor:** kubelogs.dev
+- **Licensed Work:** kubelogs.dev Log Management Service
+- **License Version:** 1.1
+- **Change Date:** January 9, 2030
+- **Change License:** Apache License, Version 2.0
+- **Additional Use Grant:** You may use the Licensed Work for your own internal business purposes only, prior to the Change Date.
+
+---
+
+## License Text
+
+The Licensor hereby grants you the right to copy, modify, create derivative works, redistribute, and make non-production use of the Licensed Work, subject to the following conditions:
+
+1. **Use Limitation**
+   You may use this Licensed Work only for the Additional Use Grant stated above.
+   Any use that would constitute providing the Licensed Work (or any derivative work)
+   as a managed or hosted service, Software-as-a-Service (SaaS), or offering to any third party
+   for commercial gain is **not permitted** prior to the Change Date.
+
+2. **Distribution**
+   You may copy and modify the Licensed Work, and you may redistribute copies of the Licensed Work,
+   including modifications and derivative works, only for the **Additional Use Grant** purposes
+   and only under this License. Each copy you distribute must include this License text.
+
+3. **Attribution**
+   You must retain all copyright, patent, trademark, and attribution notices
+   that are part of the Licensed Work.
+
+4. **No Warranty**
+   The Licensed Work is provided “AS IS,” without warranty of any kind, express or implied,
+   including but not limited to warranties of merchantability, fitness for a particular purpose,
+   and noninfringement. In no event shall the Licensor be liable for any claim, damages,
+   or other liability, whether in an action of contract, tort, or otherwise,
+   arising from, out of, or in connection with the Licensed Work or the use or other
+   dealings in the Licensed Work.
+
+5. **Change Date and Change License**
+   On the Change Date, the terms of this License will automatically be replaced by the
+   **Change License** — the Apache License, Version 2.0 — without further action by the Licensor
+   or any licensees. After the Change Date, use, copying, modification, and distribution
+   of the Licensed Work will be governed by the Change License.
+
+---
+
+**Effective Date:** January 9, 2026
+**Change Date:** January 9, 2030
+**Change License:** Apache License, Version 2.0
+**Licensor:** kubelogs.dev

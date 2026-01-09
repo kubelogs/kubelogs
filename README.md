@@ -144,7 +144,7 @@ make test
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE) for details.
+BSL 1.1 — see [LICENSE](LICENSE) for details.
 
 ---
 
