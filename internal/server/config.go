@@ -12,6 +12,14 @@ type Config struct {
 	// Default: ":50051"
 	ListenAddr string
 
+	// HTTPListenAddr is the HTTP server listen address for the web UI.
+	// Default: ":8080"
+	HTTPListenAddr string
+
+	// HTTPEnabled controls whether the HTTP server is started.
+	// Default: true
+	HTTPEnabled bool
+
 	// DBPath is the path to the SQLite database file.
 	// Default: "kubelogs.db"
 	DBPath string
@@ -30,6 +38,8 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		ListenAddr:        ":50051",
+		HTTPListenAddr:    ":8080",
+		HTTPEnabled:       true,
 		DBPath:            "kubelogs.db",
 		RetentionDays:     0,
 		RetentionInterval: time.Hour,
@@ -42,6 +52,14 @@ func ConfigFromEnv() Config {
 
 	if v := os.Getenv("KUBELOGS_LISTEN_ADDR"); v != "" {
 		cfg.ListenAddr = v
+	}
+
+	if v := os.Getenv("KUBELOGS_HTTP_ADDR"); v != "" {
+		cfg.HTTPListenAddr = v
+	}
+
+	if v := os.Getenv("KUBELOGS_HTTP_ENABLED"); v == "false" {
+		cfg.HTTPEnabled = false
 	}
 
 	if v := os.Getenv("KUBELOGS_DB_PATH"); v != "" {

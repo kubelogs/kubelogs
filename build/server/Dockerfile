@@ -24,8 +24,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /kubelogs-server /kubelogs-server
 
-# gRPC default port
-EXPOSE 50051
+# gRPC and HTTP ports
+EXPOSE 50051 8080
 
 USER nonroot:nonroot
 

@@ -471,3 +471,57 @@ func buildQuery(q storage.Query) (string, []any) {
 
 	return sql.String(), args
 }
+
+// ListNamespaces returns distinct namespace values.
+func (s *Store) ListNamespaces(ctx context.Context) ([]string, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, storage.ErrStorageClosed
+	}
+	s.mu.Unlock()
+
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT namespace FROM logs ORDER BY namespace`)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	namespaces := make([]string, 0)
+	for rows.Next() {
+		var ns string
+		if err := rows.Scan(&ns); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		namespaces = append(namespaces, ns)
+	}
+
+	return namespaces, rows.Err()
+}
+
+// ListContainers returns distinct container values.
+func (s *Store) ListContainers(ctx context.Context) ([]string, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, storage.ErrStorageClosed
+	}
+	s.mu.Unlock()
+
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT container FROM logs ORDER BY container`)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	containers := make([]string, 0)
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		containers = append(containers, c)
+	}
+
+	return containers, rows.Err()
+}

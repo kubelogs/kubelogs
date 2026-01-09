@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -59,6 +60,22 @@ func main() {
 	// Register reflection for debugging
 	reflection.Register(grpcServer)
 
+	// Start HTTP server for web UI
+	if cfg.HTTPEnabled {
+		httpServer, err := server.NewHTTPServer(store)
+		if err != nil {
+			slog.Error("failed to create HTTP server", "error", err)
+			os.Exit(1)
+		}
+
+		go func() {
+			slog.Info("HTTP server starting", "address", cfg.HTTPListenAddr)
+			if err := http.ListenAndServe(cfg.HTTPListenAddr, httpServer.Routes()); err != nil && err != http.ErrServerClosed {
+				slog.Error("HTTP server error", "error", err)
+			}
+		}()
+	}
+
 	// Start listening
 	lis, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
@@ -67,7 +84,9 @@ func main() {
 	}
 
 	slog.Info("server starting",
-		"address", cfg.ListenAddr,
+		"grpc_address", cfg.ListenAddr,
+		"http_address", cfg.HTTPListenAddr,
+		"http_enabled", cfg.HTTPEnabled,
 		"retention_days", cfg.RetentionDays,
 	)
 

@@ -1,0 +1,3 @@
+/* kubelogs UI styles */
+/* Using Tailwind CDN for development */
+/* For production, run: npx tailwindcss -i input.css -o styles.css --minify */

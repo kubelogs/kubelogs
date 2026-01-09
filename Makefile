@@ -1,4 +1,4 @@
-.PHONY: dev test build docker-build clean help
+.PHONY: dev dev-server test build docker-build clean help
 
 # Go parameters
 GOCMD=go
@@ -21,6 +21,11 @@ LDFLAGS=-s -w -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildT
 dev:
 	$(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_COLLECTOR) ./cmd/collector
 	./bin/$(BINARY_COLLECTOR)
+
+## dev-server: Run server locally with web UI
+dev-server:
+	$(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/server
+	./bin/$(BINARY_SERVER)
 
 ## test: Run all tests
 test:

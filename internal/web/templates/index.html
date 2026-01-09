@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>kubelogs</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        mono: ['JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+                    },
+                },
+            },
+        }
+    </script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.3/dist/cdn.min.js"></script>
+    <style>
+        /* Custom scrollbar for dark mode */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col font-sans"
+      x-data="app()"
+      x-init="init()"
+      @keydown.window="handleKeydown($event)">
+
+    <!-- Header -->
+    <header class="bg-gray-800 border-b border-gray-700 px-4 py-3 flex-shrink-0">
+        <div class="flex items-center gap-4 flex-wrap">
+            <!-- Logo -->
+            <h1 class="text-xl font-semibold text-white">kubelogs</h1>
+
+            <!-- Namespace filter -->
+            <div class="flex items-center gap-2">
+                <label class="text-gray-400 text-sm">Namespace:</label>
+                <select x-model="filters.namespace"
+                        @change="applyFilters()"
+                        class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">All</option>
+                    <template x-for="ns in namespaces" :key="ns">
+                        <option :value="ns" x-text="ns"></option>
+                    </template>
+                </select>
+            </div>
+
+            <!-- Container filter -->
+            <div class="flex items-center gap-2">
+                <label class="text-gray-400 text-sm">Container:</label>
+                <select x-model="filters.container"
+                        @change="applyFilters()"
+                        class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="">All</option>
+                    <template x-for="c in containers" :key="c">
+                        <option :value="c" x-text="c"></option>
+                    </template>
+                </select>
+            </div>
+
+            <!-- Severity filter -->
+            <div class="flex items-center gap-2">
+                <label class="text-gray-400 text-sm">Level:</label>
+                <select x-model="filters.minSeverity"
+                        @change="applyFilters()"
+                        class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="0">All</option>
+                    <option value="1">Trace+</option>
+                    <option value="2">Debug+</option>
+                    <option value="3">Info+</option>
+                    <option value="4">Warn+</option>
+                    <option value="5">Error+</option>
+                    <option value="6">Fatal</option>
+                </select>
+            </div>
+
+            <!-- Tail toggle -->
+            <button @click="toggleTail()"
+                    :class="tailing ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-500'"
+                    class="px-3 py-1.5 rounded text-sm font-medium transition-colors">
+                <span x-text="tailing ? 'Tailing' : 'Paused'"></span>
+            </button>
+
+            <!-- Clear button -->
+            <button @click="clearLogs()"
+                    class="px-3 py-1.5 rounded text-sm font-medium bg-gray-600 hover:bg-gray-500 transition-colors">
+                Clear
+            </button>
+
+            <!-- Stats -->
+            <div class="ml-auto flex items-center gap-4 text-sm text-gray-400">
+                <span x-show="stats.totalEntries > 0">
+                    <span x-text="stats.totalEntries.toLocaleString()"></span> entries
+                </span>
+                <span class="text-gray-500">
+                    Press <kbd class="bg-gray-700 px-1.5 py-0.5 rounded text-xs font-mono">?</kbd> for shortcuts
+                </span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Log entries -->
+    <main class="flex-1 overflow-auto font-mono text-sm" x-ref="logContainer">
+        <table class="w-full">
+            <thead class="sticky top-0 bg-gray-800 text-gray-400 text-xs uppercase">
+                <tr>
+                    <th class="px-2 py-2 text-left w-44">Timestamp</th>
+                    <th class="px-2 py-2 text-left w-32">Container</th>
+                    <th class="px-2 py-2 text-left w-16">Level</th>
+                    <th class="px-2 py-2 text-left">Message</th>
+                </tr>
+            </thead>
+            <tbody>
+                <template x-for="entry in entries" :key="entry.id">
+                    <tr class="hover:bg-gray-800/50 border-b border-gray-800/50"
+                        :class="severityRowClass(entry.severity)">
+                        <td class="px-2 py-1 text-gray-500 whitespace-nowrap align-top"
+                            x-text="formatTimestamp(entry.timestamp)"></td>
+                        <td class="px-2 py-1 text-blue-400 whitespace-nowrap align-top truncate max-w-32"
+                            :title="entry.container"
+                            x-text="entry.container"></td>
+                        <td class="px-2 py-1 whitespace-nowrap align-top font-semibold"
+                            :class="severityClass(entry.severity)"
+                            x-text="severityLabel(entry.severity)"></td>
+                        <td class="px-2 py-1 whitespace-pre-wrap break-all text-gray-200"
+                            x-text="entry.message"></td>
+                    </tr>
+                </template>
+            </tbody>
+        </table>
+
+        <!-- Empty state -->
+        <div x-show="entries.length === 0" class="flex items-center justify-center h-full text-gray-500">
+            <div class="text-center">
+                <p class="text-lg mb-2">No logs yet</p>
+                <p class="text-sm">Waiting for log entries...</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Connection status -->
+    <div x-show="!connected"
+         class="fixed bottom-4 right-4 bg-red-600 text-white px-4 py-2 rounded-lg shadow-lg">
+        Reconnecting...
+    </div>
+
+    <!-- Keyboard shortcuts modal -->
+    <div x-show="showShortcuts"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         class="fixed inset-0 bg-black/60 flex items-center justify-center z-50"
+         @click.self="showShortcuts = false"
+         @keydown.escape.window="showShortcuts = false">
+        <div class="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <h2 class="text-lg font-semibold mb-4">Keyboard Shortcuts</h2>
+            <dl class="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">?</kbd></dt>
+                <dd class="text-gray-400">Show/hide shortcuts</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">t</kbd></dt>
+                <dd class="text-gray-400">Toggle tailing</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">c</kbd></dt>
+                <dd class="text-gray-400">Clear logs</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">g</kbd></dt>
+                <dd class="text-gray-400">Go to top</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">G</kbd></dt>
+                <dd class="text-gray-400">Go to bottom</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">1-6</kbd></dt>
+                <dd class="text-gray-400">Set severity filter</dd>
+
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">Esc</kbd></dt>
+                <dd class="text-gray-400">Clear filters / Close modal</dd>
+            </dl>
+            <button @click="showShortcuts = false"
+                    class="mt-6 w-full bg-gray-700 hover:bg-gray-600 py-2 rounded transition-colors">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
