@@ -8,7 +8,7 @@ function app() {
             container: '',
             minSeverity: 0,
             search: '',
-            timeSpan: 0
+            timeSpan: 'live'
         },
         tailing: true,
         connected: false,
@@ -26,12 +26,21 @@ function app() {
         init() {
             this.loadFilters();
             this.loadStats();
-            this.startTailing();
+
+            if (this.isLiveMode()) {
+                this.startTailing();
+            } else {
+                this.loadHistoricalLogs();
+            }
 
             // Refresh filters periodically
             setInterval(() => this.loadFilters(), 30000);
             // Refresh stats periodically
             setInterval(() => this.loadStats(), 10000);
+        },
+
+        isLiveMode() {
+            return this.filters.timeSpan === 'live';
         },
 
         async loadFilters() {
@@ -56,6 +65,59 @@ function app() {
             }
         },
 
+        stopStreaming() {
+            if (this.eventSource) {
+                this.eventSource.close();
+                this.eventSource = null;
+            }
+            this.connected = false;
+        },
+
+        async loadHistoricalLogs() {
+            this.stopStreaming();
+
+            const params = new URLSearchParams();
+            if (this.filters.namespace) params.set('namespace', this.filters.namespace);
+            if (this.filters.container) params.set('container', this.filters.container);
+            if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
+            if (this.filters.search) params.set('search', this.filters.search);
+
+            const timeSpanMinutes = parseInt(this.filters.timeSpan);
+            if (timeSpanMinutes > 0) {
+                const startTime = new Date(Date.now() - timeSpanMinutes * 60 * 1000);
+                params.set('startTime', startTime.toISOString());
+            }
+
+            params.set('order', 'desc');
+            params.set('limit', '100');
+
+            try {
+                const resp = await fetch(`/api/logs?${params}`);
+                const data = await resp.json();
+
+                if (data.entries && data.entries.length > 0) {
+                    // Reverse to show chronological order (oldest first in array)
+                    this.entries = data.entries.reverse();
+                    this.oldestLoadedId = this.entries[0].id;
+                    this.hasMoreOlder = data.hasMore;
+
+                    // Scroll to bottom to show newest entries
+                    this.$nextTick(() => {
+                        const container = this.$refs.logContainer;
+                        if (container) {
+                            container.scrollTop = container.scrollHeight;
+                        }
+                    });
+                } else {
+                    this.entries = [];
+                    this.oldestLoadedId = null;
+                    this.hasMoreOlder = false;
+                }
+            } catch (err) {
+                console.error('Failed to load historical logs:', err);
+            }
+        },
+
         startTailing() {
             if (this.eventSource) {
                 this.eventSource.close();
@@ -66,10 +128,7 @@ function app() {
             if (this.filters.container) params.set('container', this.filters.container);
             if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
             if (this.filters.search) params.set('search', this.filters.search);
-            if (this.filters.timeSpan > 0) {
-                const startTime = new Date(Date.now() - this.filters.timeSpan * 60 * 1000);
-                params.set('startTime', startTime.toISOString());
-            }
+            // Note: Live mode doesn't use time filter - streams all new entries
 
             this.eventSource = new EventSource(`/api/logs/stream?${params}`);
 
@@ -132,7 +191,14 @@ function app() {
             this.oldestLoadedId = null;
             this.hasMoreOlder = true;
             this.loadingOlder = false;
-            this.startTailing();
+
+            if (this.isLiveMode()) {
+                this.tailing = true;
+                this.startTailing();
+            } else {
+                this.tailing = false;
+                this.loadHistoricalLogs();
+            }
         },
 
         clearLogs() {
@@ -154,9 +220,14 @@ function app() {
             if (this.filters.container) params.set('container', this.filters.container);
             if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
             if (this.filters.search) params.set('search', this.filters.search);
-            if (this.filters.timeSpan > 0) {
-                const startTime = new Date(Date.now() - this.filters.timeSpan * 60 * 1000);
-                params.set('startTime', startTime.toISOString());
+
+            // Apply time range filter for historical mode
+            if (!this.isLiveMode()) {
+                const timeSpanMinutes = parseInt(this.filters.timeSpan);
+                if (timeSpanMinutes > 0) {
+                    const startTime = new Date(Date.now() - timeSpanMinutes * 60 * 1000);
+                    params.set('startTime', startTime.toISOString());
+                }
             }
 
             // Use beforeId for backward pagination with descending order
@@ -206,13 +277,13 @@ function app() {
             const container = event.target;
             const scrollThreshold = 200;
 
-            // Detect scroll to top for loading older entries
-            if (container.scrollTop < scrollThreshold && !this.tailing && !this.loadingOlder) {
+            // Detect scroll to top for loading older entries (works in both modes)
+            if (container.scrollTop < scrollThreshold && !this.loadingOlder && this.hasMoreOlder) {
                 this.loadOlderEntries();
             }
 
-            // Disable tailing when user scrolls up
-            if (this.tailing) {
+            // Disable tailing when user scrolls up (only in Live mode)
+            if (this.isLiveMode() && this.tailing) {
                 const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
                 if (!isAtBottom) {
                     this.tailing = false;
@@ -255,9 +326,7 @@ function app() {
                     break;
                 case 'u':
                     e.preventDefault();
-                    if (!this.tailing) {
-                        this.loadOlderEntries();
-                    }
+                    this.loadOlderEntries();
                     break;
                 case '1':
                 case '2':
@@ -274,7 +343,7 @@ function app() {
                     if (this.showShortcuts) {
                         this.showShortcuts = false;
                     } else {
-                        this.filters = { namespace: '', container: '', minSeverity: 0, search: '', timeSpan: 0 };
+                        this.filters = { namespace: '', container: '', minSeverity: 0, search: '', timeSpan: 'live' };
                         this.applyFilters();
                     }
                     break;

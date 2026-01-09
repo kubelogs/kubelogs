@@ -441,19 +441,11 @@ func buildQuery(q storage.Query) (string, []any) {
 	}
 
 	if q.Pagination.AfterID > 0 {
-		if q.Pagination.Order == storage.OrderAsc {
-			sql.WriteString(" AND l.id > ?")
-		} else {
-			sql.WriteString(" AND l.id < ?")
-		}
+		sql.WriteString(" AND l.id > ?")
 		args = append(args, q.Pagination.AfterID)
 	}
 	if q.Pagination.BeforeID > 0 {
-		if q.Pagination.Order == storage.OrderAsc {
-			sql.WriteString(" AND l.id < ?")
-		} else {
-			sql.WriteString(" AND l.id > ?")
-		}
+		sql.WriteString(" AND l.id < ?")
 		args = append(args, q.Pagination.BeforeID)
 	}
 
