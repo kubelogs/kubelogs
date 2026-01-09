@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package kubelogs.storage.v1;
+
+option go_package = "github.com/kubelogs/kubelogs/api/storagepb";
+
+// StorageService provides log storage operations.
+service StorageService {
+  // Write persists a batch of log entries.
+  rpc Write(WriteRequest) returns (WriteResponse);
+
+  // Query searches for log entries matching the given criteria.
+  rpc Query(QueryRequest) returns (QueryResponse);
+
+  // GetByID retrieves a single entry by its ID.
+  rpc GetByID(GetByIDRequest) returns (GetByIDResponse);
+
+  // Delete removes entries older than the given timestamp.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Stats returns storage statistics.
+  rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+// LogEntry represents a single log record.
+message LogEntry {
+  int64 id = 1;
+  int64 timestamp_nanos = 2;
+  string namespace = 3;
+  string pod = 4;
+  string container = 5;
+  uint32 severity = 6;
+  string message = 7;
+  map<string, string> attributes = 8;
+}
+
+// WriteRequest contains log entries to persist.
+message WriteRequest {
+  repeated LogEntry entries = 1;
+}
+
+// WriteResponse contains the result of a write operation.
+message WriteResponse {
+  int32 count = 1;
+}
+
+// QueryRequest contains search criteria for log entries.
+message QueryRequest {
+  // Time range (start inclusive, end exclusive).
+  int64 start_time_nanos = 1;
+  int64 end_time_nanos = 2;
+
+  // Full-text search on message body.
+  string search = 3;
+
+  // Kubernetes field filters (exact match).
+  string namespace = 4;
+  string pod = 5;
+  string container = 6;
+
+  // Severity filter - returns entries >= this level.
+  uint32 min_severity = 7;
+
+  // Attribute filters (exact match, AND logic).
+  map<string, string> attributes = 8;
+
+  // Pagination controls.
+  int32 limit = 9;
+  int64 after_id = 10;
+  int64 before_id = 11;
+  Order order = 12;
+}
+
+// Order defines sort order for query results.
+enum Order {
+  ORDER_DESC = 0;
+  ORDER_ASC = 1;
+}
+
+// QueryResponse contains the results of a log query.
+message QueryResponse {
+  repeated LogEntry entries = 1;
+  bool has_more = 2;
+  int64 next_cursor = 3;
+  int64 total_estimate = 4;
+}
+
+// GetByIDRequest requests a single log entry by ID.
+message GetByIDRequest {
+  int64 id = 1;
+}
+
+// GetByIDResponse contains a single log entry.
+message GetByIDResponse {
+  LogEntry entry = 1;
+}
+
+// DeleteRequest specifies entries to delete by age.
+message DeleteRequest {
+  int64 older_than_nanos = 1;
+}
+
+// DeleteResponse contains the result of a delete operation.
+message DeleteResponse {
+  int64 deleted_count = 1;
+}
+
+// StatsRequest requests storage statistics.
+message StatsRequest {}
+
+// StatsResponse contains storage statistics.
+message StatsResponse {
+  int64 total_entries = 1;
+  int64 disk_size_bytes = 2;
+  int64 oldest_entry_nanos = 3;
+  int64 newest_entry_nanos = 4;
+}
