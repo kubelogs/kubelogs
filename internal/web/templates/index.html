@@ -89,6 +89,33 @@
                 </select>
             </div>
 
+            <!-- Search input -->
+            <div class="flex items-center gap-2">
+                <label class="text-gray-400 text-sm">Search:</label>
+                <input type="text"
+                       x-model="filters.search"
+                       x-ref="searchInput"
+                       @keydown.enter="applyFilters()"
+                       @input.debounce.500ms="applyFilters()"
+                       placeholder="Search logs..."
+                       class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <!-- Time span filter -->
+            <div class="flex items-center gap-2">
+                <label class="text-gray-400 text-sm">Time:</label>
+                <select x-model="filters.timeSpan"
+                        @change="applyFilters()"
+                        class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <option value="0">All time</option>
+                    <option value="15">Last 15 min</option>
+                    <option value="30">Last 30 min</option>
+                    <option value="60">Last 1 hour</option>
+                    <option value="360">Last 6 hours</option>
+                    <option value="1440">Last 24 hours</option>
+                </select>
+            </div>
+
             <!-- Tail toggle -->
             <button @click="toggleTail()"
                     :class="tailing ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-500'"
@@ -173,6 +200,9 @@
         <div class="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
             <h2 class="text-lg font-semibold mb-4">Keyboard Shortcuts</h2>
             <dl class="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">/</kbd></dt>
+                <dd class="text-gray-400">Focus search</dd>
+
                 <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">?</kbd></dt>
                 <dd class="text-gray-400">Show/hide shortcuts</dd>
 

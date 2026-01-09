@@ -34,6 +34,8 @@ func (s *HTTPServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		Namespace:   filters.namespace,
 		Container:   filters.container,
 		MinSeverity: filters.minSeverity,
+		Search:      filters.search,
+		StartTime:   filters.startTime,
 		Pagination: storage.Pagination{
 			Limit: 50,
 			Order: storage.OrderDesc,
@@ -62,6 +64,8 @@ func (s *HTTPServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
 				Namespace:   filters.namespace,
 				Container:   filters.container,
 				MinSeverity: filters.minSeverity,
+				Search:      filters.search,
+				StartTime:   filters.startTime,
 				Pagination: storage.Pagination{
 					Limit:   100,
 					AfterID: lastID,
@@ -92,6 +96,8 @@ type sseFilters struct {
 	namespace   string
 	container   string
 	minSeverity storage.Severity
+	search      string
+	startTime   time.Time
 }
 
 // parseSSEFilters extracts filter parameters from the request.
@@ -101,10 +107,17 @@ func (s *HTTPServer) parseSSEFilters(r *http.Request) sseFilters {
 
 	filters.namespace = params.Get("namespace")
 	filters.container = params.Get("container")
+	filters.search = params.Get("search")
 
 	if v := params.Get("minSeverity"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 && n <= 6 {
 			filters.minSeverity = storage.Severity(n)
+		}
+	}
+
+	if v := params.Get("startTime"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			filters.startTime = t
 		}
 	}
 

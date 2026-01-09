@@ -6,7 +6,9 @@ function app() {
         filters: {
             namespace: '',
             container: '',
-            minSeverity: 0
+            minSeverity: 0,
+            search: '',
+            timeSpan: 0
         },
         tailing: true,
         connected: false,
@@ -60,6 +62,11 @@ function app() {
             if (this.filters.namespace) params.set('namespace', this.filters.namespace);
             if (this.filters.container) params.set('container', this.filters.container);
             if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
+            if (this.filters.search) params.set('search', this.filters.search);
+            if (this.filters.timeSpan > 0) {
+                const startTime = new Date(Date.now() - this.filters.timeSpan * 60 * 1000);
+                params.set('startTime', startTime.toISOString());
+            }
 
             this.eventSource = new EventSource(`/api/logs/stream?${params}`);
 
@@ -124,6 +131,10 @@ function app() {
             }
 
             switch (e.key) {
+                case '/':
+                    e.preventDefault();
+                    this.$refs.searchInput.focus();
+                    break;
                 case '?':
                     e.preventDefault();
                     this.showShortcuts = !this.showShortcuts;
@@ -161,7 +172,7 @@ function app() {
                     if (this.showShortcuts) {
                         this.showShortcuts = false;
                     } else {
-                        this.filters = { namespace: '', container: '', minSeverity: 0 };
+                        this.filters = { namespace: '', container: '', minSeverity: 0, search: '', timeSpan: 0 };
                         this.applyFilters();
                     }
                     break;
