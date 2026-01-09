@@ -53,6 +53,12 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// SQLite works best with a single connection in WAL mode,
+	// especially on network-backed storage (PVCs).
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
 	if _, err := db.Exec(pragmaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("set pragmas: %w", err)
