@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	"github.com/kubelogs/kubelogs/api/storagepb"
@@ -23,6 +24,11 @@ type Client struct {
 func NewClient(addr string) (*Client, error) {
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                10 * time.Second, // Ping server every 10s if idle
+			Timeout:             5 * time.Second,  // Wait 5s for ping ack
+			PermitWithoutStream: true,             // Send pings even with no active RPCs
+		}),
 	)
 	if err != nil {
 		return nil, err

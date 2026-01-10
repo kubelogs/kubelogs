@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
 	"github.com/kubelogs/kubelogs/api/storagepb"
@@ -48,8 +50,17 @@ func main() {
 		go retentionWorker.Run(ctx)
 	}
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
+	// Create gRPC server with keepalive to detect dead connections
+	grpcServer := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    15 * time.Second, // Ping client every 15s if idle
+			Timeout: 5 * time.Second,  // Wait 5s for ping ack
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second, // Minimum time between client pings
+			PermitWithoutStream: true,
+		}),
+	)
 	storagepb.RegisterStorageServiceServer(grpcServer, server.New(store))
 
 	// Register health check service
