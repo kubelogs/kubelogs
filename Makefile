@@ -1,4 +1,4 @@
-.PHONY: dev dev-server test build docker-build clean help
+.PHONY: dev dev-server loadgen test build docker-build clean help
 
 # Go parameters
 GOCMD=go
@@ -26,6 +26,11 @@ dev:
 dev-server:
 	$(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/server
 	./bin/$(BINARY_SERVER)
+
+## loadgen: Run load generator locally
+loadgen:
+	$(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/kubelogs-loadgen ./cmd/loadgen
+	./bin/kubelogs-loadgen $(ARGS)
 
 ## test: Run all tests
 test:
