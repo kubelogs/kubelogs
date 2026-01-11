@@ -22,19 +22,41 @@ type Batcher struct {
 	buffer    storage.LogBatch
 	lastFlush time.Time
 
+	// Retry queue for failed batches
+	retryMu    sync.Mutex
+	retryQueue []storage.LogBatch
+	backoff    time.Duration
+
+	// Circuit breaker
+	consecutiveFailures int
+	circuitOpen         bool
+	circuitOpenUntil    time.Time
+
 	// Metrics
 	totalWrites  atomic.Int64
 	totalEntries atomic.Int64
 	writeErrors  atomic.Int64
+	retriedBatches atomic.Int64
 }
 
 // BatcherStats contains batcher statistics.
 type BatcherStats struct {
-	TotalWrites  int64
-	TotalEntries int64
-	WriteErrors  int64
-	BufferSize   int
+	TotalWrites    int64
+	TotalEntries   int64
+	WriteErrors    int64
+	BufferSize     int
+	RetryQueueSize int
+	RetriedBatches int64
+	CircuitOpen    bool
 }
+
+const (
+	minBackoff       = time.Second
+	maxBackoff       = 30 * time.Second
+	maxRetryQueue    = 100 // Maximum number of batches to queue for retry
+	circuitThreshold = 5   // Consecutive failures before opening circuit
+	circuitTimeout   = 30 * time.Second
+)
 
 // NewBatcher creates a log batcher.
 func NewBatcher(
@@ -50,6 +72,8 @@ func NewBatcher(
 		flushInterval: flushInterval,
 		buffer:        make(storage.LogBatch, 0, batchSize),
 		lastFlush:     time.Now(),
+		retryQueue:    make([]storage.LogBatch, 0),
+		backoff:       minBackoff,
 	}
 }
 
@@ -58,6 +82,9 @@ func NewBatcher(
 func (b *Batcher) Run(ctx context.Context) error {
 	ticker := time.NewTicker(b.flushInterval)
 	defer ticker.Stop()
+
+	retryTicker := time.NewTicker(b.backoff)
+	defer retryTicker.Stop()
 
 	for {
 		select {
@@ -91,6 +118,17 @@ func (b *Batcher) Run(ctx context.Context) error {
 				}
 			}
 
+		case <-retryTicker.C:
+			// Process retry queue if not empty and circuit is not open
+			if !b.isCircuitOpen() {
+				b.processRetryQueue(ctx)
+			}
+			// Adjust ticker to current backoff
+			b.retryMu.Lock()
+			currentBackoff := b.backoff
+			b.retryMu.Unlock()
+			retryTicker.Reset(currentBackoff)
+
 		case <-ctx.Done():
 			// Graceful shutdown - flush remaining with timeout
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -118,20 +156,118 @@ func (b *Batcher) flush(ctx context.Context) error {
 	b.lastFlush = time.Now()
 	b.mu.Unlock()
 
+	// Check circuit breaker before attempting write
+	if b.isCircuitOpen() {
+		b.addToRetryQueue(batch)
+		return nil // Don't return error, batch is queued
+	}
+
 	n, err := b.store.Write(ctx, batch)
 	if err != nil {
 		b.writeErrors.Add(1)
-		slog.Error("failed to write batch",
+		b.recordFailure()
+		b.addToRetryQueue(batch)
+		slog.Warn("batch write failed, queued for retry",
 			"entries", len(batch),
+			"retry_queue_size", len(b.retryQueue),
 			"error", err,
 		)
-		return err
+		return nil // Don't return error, batch is queued
 	}
 
+	b.recordSuccess()
 	b.totalWrites.Add(1)
 	b.totalEntries.Add(int64(n))
 
 	return nil
+}
+
+func (b *Batcher) isCircuitOpen() bool {
+	b.retryMu.Lock()
+	defer b.retryMu.Unlock()
+
+	if b.circuitOpen && time.Now().After(b.circuitOpenUntil) {
+		b.circuitOpen = false
+		b.consecutiveFailures = 0
+		slog.Info("circuit breaker closed, resuming writes")
+	}
+	return b.circuitOpen
+}
+
+func (b *Batcher) recordFailure() {
+	b.retryMu.Lock()
+	defer b.retryMu.Unlock()
+
+	b.consecutiveFailures++
+	if b.consecutiveFailures >= circuitThreshold {
+		b.circuitOpen = true
+		b.circuitOpenUntil = time.Now().Add(circuitTimeout)
+		slog.Warn("circuit breaker opened",
+			"failures", b.consecutiveFailures,
+			"reopen_at", b.circuitOpenUntil,
+		)
+	}
+}
+
+func (b *Batcher) recordSuccess() {
+	b.retryMu.Lock()
+	defer b.retryMu.Unlock()
+
+	b.consecutiveFailures = 0
+	b.backoff = minBackoff
+}
+
+func (b *Batcher) addToRetryQueue(batch storage.LogBatch) {
+	b.retryMu.Lock()
+	defer b.retryMu.Unlock()
+
+	if len(b.retryQueue) >= maxRetryQueue {
+		slog.Warn("retry queue full, dropping oldest batch",
+			"queue_size", len(b.retryQueue),
+			"dropped_entries", len(b.retryQueue[0]),
+		)
+		b.retryQueue = b.retryQueue[1:] // Drop oldest
+	}
+
+	b.retryQueue = append(b.retryQueue, batch)
+}
+
+func (b *Batcher) processRetryQueue(ctx context.Context) {
+	b.retryMu.Lock()
+	if len(b.retryQueue) == 0 {
+		b.retryMu.Unlock()
+		return
+	}
+
+	// Take first batch from queue
+	batch := b.retryQueue[0]
+	b.retryMu.Unlock()
+
+	n, err := b.store.Write(ctx, batch)
+	if err != nil {
+		b.recordFailure()
+		slog.Warn("retry failed, will try again",
+			"entries", len(batch),
+			"backoff", b.backoff,
+			"error", err,
+		)
+		// Exponential backoff
+		b.retryMu.Lock()
+		b.backoff = min(b.backoff*2, maxBackoff)
+		b.retryMu.Unlock()
+		return
+	}
+
+	// Success - remove from queue
+	b.retryMu.Lock()
+	b.retryQueue = b.retryQueue[1:]
+	b.retryMu.Unlock()
+
+	b.recordSuccess()
+	b.retriedBatches.Add(1)
+	b.totalWrites.Add(1)
+	b.totalEntries.Add(int64(n))
+	slog.Info("retry succeeded", "entries", n)
 }
 
 func (b *Batcher) convertToEntry(line LogLine) storage.LogEntry {
@@ -154,10 +290,18 @@ func (b *Batcher) Stats() BatcherStats {
 	bufSize := len(b.buffer)
 	b.mu.Unlock()
 
+	b.retryMu.Lock()
+	retrySize := len(b.retryQueue)
+	circuitOpen := b.circuitOpen
+	b.retryMu.Unlock()
+
 	return BatcherStats{
-		TotalWrites:  b.totalWrites.Load(),
-		TotalEntries: b.totalEntries.Load(),
-		WriteErrors:  b.writeErrors.Load(),
-		BufferSize:   bufSize,
+		TotalWrites:    b.totalWrites.Load(),
+		TotalEntries:   b.totalEntries.Load(),
+		WriteErrors:    b.writeErrors.Load(),
+		BufferSize:     bufSize,
+		RetryQueueSize: retrySize,
+		RetriedBatches: b.retriedBatches.Load(),
+		CircuitOpen:    circuitOpen,
 	}
 }

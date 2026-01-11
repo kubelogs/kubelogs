@@ -144,6 +144,8 @@ func (m *StreamManager) StopAll() {
 		m.cancel()
 	}
 	m.wg.Wait()
+	// Close output channel to signal batcher that no more logs are coming
+	close(m.output)
 }
 
 // ActiveStreams returns the number of active streams.

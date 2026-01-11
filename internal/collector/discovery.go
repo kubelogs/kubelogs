@@ -40,6 +40,8 @@ type PodDiscovery struct {
 
 	factory  informers.SharedInformerFactory
 	informer cache.SharedIndexInformer
+
+	ctx context.Context
 }
 
 // containerState tracks a container's running state.
@@ -54,7 +56,7 @@ func NewPodDiscovery(clientset kubernetes.Interface, nodeName string) *PodDiscov
 	return &PodDiscovery{
 		nodeName:        nodeName,
 		clientset:       clientset,
-		events:          make(chan PodEvent, 100),
+		events:          make(chan PodEvent, 1000), // Increased from 100 to handle high pod churn
 		containerStates: make(map[string]containerState),
 	}
 }
@@ -66,6 +68,8 @@ func (d *PodDiscovery) Events() <-chan PodEvent {
 
 // Start begins watching pods. Blocks until ctx is canceled.
 func (d *PodDiscovery) Start(ctx context.Context) error {
+	d.ctx = ctx
+
 	// Create informer factory with field selector for this node
 	tweakListOptions := func(opts *metav1.ListOptions) {
 		opts.FieldSelector = fields.OneTermEqualSelector("spec.nodeName", d.nodeName).String()
@@ -216,10 +220,29 @@ func (d *PodDiscovery) processContainerStatuses(pod *corev1.Pod) {
 }
 
 func (d *PodDiscovery) emitEvent(event PodEvent) {
+	// Try non-blocking first
 	select {
 	case d.events <- event:
+		return
 	default:
-		slog.Warn("pod event channel full, dropping event",
+	}
+
+	// Channel is full - block with timeout to avoid silent drops
+	slog.Warn("pod event channel full, waiting to emit",
+		"type", event.Type,
+		"container", event.Container.Key(),
+		"bufferSize", len(d.events),
+	)
+
+	select {
+	case d.events <- event:
+	case <-d.ctx.Done():
+		slog.Error("failed to emit pod event - context cancelled",
+			"type", event.Type,
+			"container", event.Container.Key(),
+		)
+	case <-time.After(5 * time.Second):
+		slog.Error("failed to emit pod event - timeout after 5s",
 			"type", event.Type,
 			"container", event.Container.Key(),
 		)
