@@ -24,7 +24,11 @@ type Parser struct {
 	severityPatterns []*severityPattern
 }
 
-// Well-known JSON field names to extract (with aliases)
+// maxAttributes limits the number of extracted attributes to prevent unbounded growth.
+const maxAttributes = 20
+
+// Well-known JSON field names to normalize (with aliases)
+// These map various common field names to canonical names.
 var jsonFieldAliases = map[string][]string{
 	"msg":        {"msg", "message", "error", "err"},
 	"trace_id":   {"trace_id", "traceId", "trace-id", "traceID"},
@@ -34,6 +38,9 @@ var jsonFieldAliases = map[string][]string{
 	"service":    {"service", "app", "application"},
 	"user_id":    {"user_id", "userId", "user"},
 }
+
+// reverseAliases maps field aliases back to their canonical names for quick lookup.
+var reverseAliases = buildReverseAliases()
 
 type severityPattern struct {
 	regex    *regexp.Regexp
@@ -59,14 +66,29 @@ func NewParser() *Parser {
 // Parse extracts timestamp, severity, and structured fields from a log line.
 // Kubernetes log lines have the format: "2024-01-15T10:30:00.123456789Z message"
 // Returns defaults (current time, SeverityUnknown) if parsing fails.
-// For JSON logs, also extracts well-known fields into Attributes.
+// For structured logs (JSON/logfmt), extracts all scalar fields into Attributes.
+// If a message field (msg, message, error, err) is found, uses that as Message
+// instead of the full log line.
 func (p *Parser) Parse(line string) ParseResult {
 	timestamp, message := p.parseTimestamp(line)
 	severity, attrs := p.parseStructured(message)
+
+	// Use extracted message if available, otherwise keep full line
+	finalMessage := message
+	if attrs != nil {
+		if msg, ok := attrs["msg"]; ok && msg != "" {
+			finalMessage = msg
+			delete(attrs, "msg") // Avoid duplication
+			if len(attrs) == 0 {
+				attrs = nil
+			}
+		}
+	}
+
 	return ParseResult{
 		Timestamp:  timestamp,
 		Severity:   severity,
-		Message:    message,
+		Message:    finalMessage,
 		Attributes: attrs,
 	}
 }
@@ -157,20 +179,31 @@ func (p *Parser) parseJSON(message string) (storage.Severity, map[string]string)
 	return severity, attrs
 }
 
-// extractJSONFields extracts well-known fields from a parsed JSON log.
-// Only extracts string values to keep things simple and memory-efficient.
+// extractJSONFields extracts all scalar fields from a parsed JSON log.
+// Known field aliases are normalized to canonical names.
+// Limits extraction to maxAttributes to prevent unbounded growth.
 func extractJSONFields(data map[string]any) map[string]string {
 	attrs := make(map[string]string)
 
-	for canonicalName, aliases := range jsonFieldAliases {
-		for _, alias := range aliases {
-			if val, ok := data[alias]; ok {
-				str := stringifyValue(val)
-				if str != "" {
-					attrs[canonicalName] = str
-					break // Use first match
-				}
+	// Extract all scalar fields, normalizing known aliases
+	for key, val := range data {
+		if len(attrs) >= maxAttributes {
+			break
+		}
+
+		str := stringifyValue(val)
+		if str == "" {
+			continue // Skip non-scalar values
+		}
+
+		// Normalize known aliases to canonical names
+		if canonical, ok := reverseAliases[key]; ok {
+			// Only set if not already present (first alias wins)
+			if _, exists := attrs[canonical]; !exists {
+				attrs[canonical] = str
 			}
+		} else {
+			attrs[key] = str
 		}
 	}
 
@@ -203,6 +236,17 @@ func stringifyValue(val any) string {
 		// Skip arrays, objects, null
 		return ""
 	}
+}
+
+// buildReverseAliases creates a map from field aliases to their canonical names.
+func buildReverseAliases() map[string]string {
+	reverse := make(map[string]string)
+	for canonical, aliases := range jsonFieldAliases {
+		for _, alias := range aliases {
+			reverse[alias] = canonical
+		}
+	}
+	return reverse
 }
 
 // parseLogfmt parses a logfmt log line and extracts severity and well-known fields.
@@ -349,16 +393,28 @@ func unescapeLogfmtValue(s string) string {
 	return result.String()
 }
 
-// extractLogfmtAttrs extracts well-known fields from parsed logfmt fields.
+// extractLogfmtAttrs extracts all fields from parsed logfmt fields.
+// Known field aliases are normalized to canonical names.
+// Limits extraction to maxAttributes to prevent unbounded growth.
 func extractLogfmtAttrs(fields map[string]string) map[string]string {
 	attrs := make(map[string]string)
 
-	for canonicalName, aliases := range jsonFieldAliases {
-		for _, alias := range aliases {
-			if val, ok := fields[alias]; ok && val != "" {
-				attrs[canonicalName] = val
-				break // Use first match
+	for key, val := range fields {
+		if len(attrs) >= maxAttributes {
+			break
+		}
+		if val == "" {
+			continue
+		}
+
+		// Normalize known aliases to canonical names
+		if canonical, ok := reverseAliases[key]; ok {
+			// Only set if not already present (first alias wins)
+			if _, exists := attrs[canonical]; !exists {
+				attrs[canonical] = val
 			}
+		} else {
+			attrs[key] = val
 		}
 	}
 

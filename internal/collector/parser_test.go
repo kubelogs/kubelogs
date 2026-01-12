@@ -171,73 +171,86 @@ func TestParser_JSONFieldExtraction(t *testing.T) {
 	parser := NewParser()
 
 	tests := []struct {
-		name      string
-		line      string
-		wantAttrs map[string]string
+		name        string
+		line        string
+		wantMessage string // Expected Message field (extracted msg or full line)
+		wantAttrs   map[string]string
 	}{
 		{
-			name: "Extract msg field",
-			line: `2024-01-15T10:30:00Z {"level":"INFO","msg":"hello world"}`,
-			wantAttrs: map[string]string{
-				"msg": "hello world",
-			},
+			name:        "Extract msg field - msg becomes Message",
+			line:        `2024-01-15T10:30:00Z {"level":"INFO","msg":"hello world"}`,
+			wantMessage: "hello world",
+			wantAttrs:   map[string]string{"level": "INFO"},
 		},
 		{
-			name: "Extract message as msg",
-			line: `2024-01-15T10:30:00Z {"level":"INFO","message":"hello world"}`,
-			wantAttrs: map[string]string{
-				"msg": "hello world",
-			},
+			name:        "Extract message as msg - message alias becomes Message",
+			line:        `2024-01-15T10:30:00Z {"level":"INFO","message":"hello world"}`,
+			wantMessage: "hello world",
+			wantAttrs:   map[string]string{"level": "INFO"},
 		},
 		{
-			name: "Extract trace_id variants",
-			line: `2024-01-15T10:30:00Z {"level":"INFO","traceId":"abc123","msg":"test"}`,
+			name:        "Extract trace_id variants",
+			line:        `2024-01-15T10:30:00Z {"level":"INFO","traceId":"abc123","msg":"test"}`,
+			wantMessage: "test",
 			wantAttrs: map[string]string{
-				"msg":      "test",
 				"trace_id": "abc123",
+				"level":    "INFO",
 			},
 		},
 		{
-			name: "Extract request_id",
-			line: `2024-01-15T10:30:00Z {"level":"INFO","requestId":"req-456","msg":"test"}`,
+			name:        "Extract request_id",
+			line:        `2024-01-15T10:30:00Z {"level":"INFO","requestId":"req-456","msg":"test"}`,
+			wantMessage: "test",
 			wantAttrs: map[string]string{
-				"msg":        "test",
 				"request_id": "req-456",
+				"level":      "INFO",
 			},
 		},
 		{
-			name: "Extract multiple fields",
-			line: `2024-01-15T10:30:00Z {"level":"ERROR","msg":"failed","trace_id":"t1","span_id":"s1","service":"api"}`,
+			name:        "Extract multiple fields",
+			line:        `2024-01-15T10:30:00Z {"level":"ERROR","msg":"failed","trace_id":"t1","span_id":"s1","service":"api"}`,
+			wantMessage: "failed",
 			wantAttrs: map[string]string{
-				"msg":      "failed",
 				"trace_id": "t1",
 				"span_id":  "s1",
 				"service":  "api",
+				"level":    "ERROR",
 			},
 		},
 		{
-			name: "Numeric values converted to string",
-			line: `2024-01-15T10:30:00Z {"level":"INFO","user_id":12345,"msg":"test"}`,
+			name:        "Numeric values converted to string",
+			line:        `2024-01-15T10:30:00Z {"level":"INFO","user_id":12345,"msg":"test"}`,
+			wantMessage: "test",
 			wantAttrs: map[string]string{
-				"msg":     "test",
 				"user_id": "12345",
+				"level":   "INFO",
 			},
 		},
 		{
-			name:      "Non-JSON returns nil attrs",
-			line:      `2024-01-15T10:30:00Z [INFO] plain text log`,
-			wantAttrs: nil,
+			name:        "Non-JSON returns nil attrs",
+			line:        `2024-01-15T10:30:00Z [INFO] plain text log`,
+			wantMessage: "[INFO] plain text log",
+			wantAttrs:   nil,
 		},
 		{
-			name:      "JSON without extractable fields",
-			line:      `2024-01-15T10:30:00Z {"level":"INFO","custom":"value"}`,
-			wantAttrs: nil,
+			name:        "JSON with custom fields extracts all",
+			line:        `2024-01-15T10:30:00Z {"level":"INFO","custom":"value","another":123}`,
+			wantMessage: `{"level":"INFO","custom":"value","another":123}`,
+			wantAttrs: map[string]string{
+				"level":   "INFO",
+				"custom":  "value",
+				"another": "123",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := parser.Parse(tt.line)
+
+			if result.Message != tt.wantMessage {
+				t.Errorf("message = %q, want %q", result.Message, tt.wantMessage)
+			}
 
 			if tt.wantAttrs == nil {
 				if result.Attributes != nil {
@@ -257,6 +270,11 @@ func TestParser_JSONFieldExtraction(t *testing.T) {
 				} else if gotVal != wantVal {
 					t.Errorf("attribute[%q] = %q, want %q", key, gotVal, wantVal)
 				}
+			}
+
+			// Ensure msg is not in attributes (moved to Message)
+			if _, ok := result.Attributes["msg"]; ok {
+				t.Errorf("msg should not be in attributes, should be in Message")
 			}
 		})
 	}
@@ -322,87 +340,98 @@ func TestParser_LogfmtFieldExtraction(t *testing.T) {
 	parser := NewParser()
 
 	tests := []struct {
-		name      string
-		line      string
-		wantAttrs map[string]string
+		name        string
+		line        string
+		wantMessage string // Expected Message field (extracted msg or full line)
+		wantAttrs   map[string]string
 	}{
 		{
-			name: "Extract msg field",
-			line: `2024-01-15T10:30:00Z level=info msg="hello world"`,
-			wantAttrs: map[string]string{
-				"msg": "hello world",
-			},
+			name:        "Extract msg field - msg becomes Message",
+			line:        `2024-01-15T10:30:00Z level=info msg="hello world"`,
+			wantMessage: "hello world",
+			wantAttrs:   map[string]string{"level": "info"},
 		},
 		{
-			name: "Extract unquoted msg",
-			line: `2024-01-15T10:30:00Z level=info msg=hello`,
-			wantAttrs: map[string]string{
-				"msg": "hello",
-			},
+			name:        "Extract unquoted msg",
+			line:        `2024-01-15T10:30:00Z level=info msg=hello`,
+			wantMessage: "hello",
+			wantAttrs:   map[string]string{"level": "info"},
 		},
 		{
-			name: "Extract trace_id",
-			line: `2024-01-15T10:30:00Z level=info trace_id=abc123 msg=test`,
+			name:        "Extract trace_id",
+			line:        `2024-01-15T10:30:00Z level=info trace_id=abc123 msg=test`,
+			wantMessage: "test",
 			wantAttrs: map[string]string{
-				"msg":      "test",
 				"trace_id": "abc123",
+				"level":    "info",
 			},
 		},
 		{
-			name: "Extract request_id",
-			line: `2024-01-15T10:30:00Z level=info request_id=req-456 msg=test`,
+			name:        "Extract request_id",
+			line:        `2024-01-15T10:30:00Z level=info request_id=req-456 msg=test`,
+			wantMessage: "test",
 			wantAttrs: map[string]string{
-				"msg":        "test",
 				"request_id": "req-456",
+				"level":      "info",
 			},
 		},
 		{
-			name: "Extract multiple fields",
-			line: `2024-01-15T10:30:00Z level=error msg=failed trace_id=t1 span_id=s1 service=api`,
+			name:        "Extract multiple fields",
+			line:        `2024-01-15T10:30:00Z level=error msg=failed trace_id=t1 span_id=s1 service=api`,
+			wantMessage: "failed",
 			wantAttrs: map[string]string{
-				"msg":      "failed",
 				"trace_id": "t1",
 				"span_id":  "s1",
 				"service":  "api",
+				"level":    "error",
 			},
 		},
 		{
-			name: "Quoted value with spaces",
-			line: `2024-01-15T10:30:00Z level=info msg="hello world with spaces" service=test`,
+			name:        "Quoted value with spaces",
+			line:        `2024-01-15T10:30:00Z level=info msg="hello world with spaces" service=test`,
+			wantMessage: "hello world with spaces",
 			wantAttrs: map[string]string{
-				"msg":     "hello world with spaces",
 				"service": "test",
+				"level":   "info",
 			},
 		},
 		{
-			name: "Escaped quotes in value",
-			line: `2024-01-15T10:30:00Z level=info msg="say \"hello\""`,
+			name:        "Escaped quotes in value",
+			line:        `2024-01-15T10:30:00Z level=info msg="say \"hello\""`,
+			wantMessage: `say "hello"`,
+			wantAttrs:   map[string]string{"level": "info"},
+		},
+		{
+			name:        "Error field as msg alias - err becomes Message",
+			line:        `2024-01-15T10:30:00Z level=error err="connection timeout"`,
+			wantMessage: "connection timeout",
+			wantAttrs:   map[string]string{"level": "error"},
+		},
+		{
+			name:        "Non-logfmt returns nil attrs",
+			line:        `2024-01-15T10:30:00Z [INFO] plain text log`,
+			wantMessage: "[INFO] plain text log",
+			wantAttrs:   nil,
+		},
+		{
+			name:        "Logfmt with custom fields extracts all",
+			line:        `2024-01-15T10:30:00Z level=info custom=value another=123`,
+			wantMessage: `level=info custom=value another=123`,
 			wantAttrs: map[string]string{
-				"msg": `say "hello"`,
+				"level":   "info",
+				"custom":  "value",
+				"another": "123",
 			},
-		},
-		{
-			name: "Error field as msg alias",
-			line: `2024-01-15T10:30:00Z level=error err="connection timeout"`,
-			wantAttrs: map[string]string{
-				"msg": "connection timeout",
-			},
-		},
-		{
-			name:      "Non-logfmt returns nil attrs",
-			line:      `2024-01-15T10:30:00Z [INFO] plain text log`,
-			wantAttrs: nil,
-		},
-		{
-			name:      "Logfmt without extractable fields",
-			line:      `2024-01-15T10:30:00Z level=info custom=value`,
-			wantAttrs: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := parser.Parse(tt.line)
+
+			if result.Message != tt.wantMessage {
+				t.Errorf("message = %q, want %q", result.Message, tt.wantMessage)
+			}
 
 			if tt.wantAttrs == nil {
 				if result.Attributes != nil {
@@ -422,6 +451,11 @@ func TestParser_LogfmtFieldExtraction(t *testing.T) {
 				} else if gotVal != wantVal {
 					t.Errorf("attribute[%q] = %q, want %q", key, gotVal, wantVal)
 				}
+			}
+
+			// Ensure msg is not in attributes (moved to Message)
+			if _, ok := result.Attributes["msg"]; ok {
+				t.Errorf("msg should not be in attributes, should be in Message")
 			}
 		})
 	}
@@ -539,5 +573,67 @@ func TestParseLogfmtFields(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParser_MaxAttributesLimit(t *testing.T) {
+	parser := NewParser()
+
+	// Build a JSON log with more than maxAttributes (20) fields
+	jsonWithManyFields := `2024-01-15T10:30:00Z {"level":"INFO","msg":"test","f1":"v1","f2":"v2","f3":"v3","f4":"v4","f5":"v5","f6":"v6","f7":"v7","f8":"v8","f9":"v9","f10":"v10","f11":"v11","f12":"v12","f13":"v13","f14":"v14","f15":"v15","f16":"v16","f17":"v17","f18":"v18","f19":"v19","f20":"v20","f21":"v21","f22":"v22"}`
+
+	result := parser.Parse(jsonWithManyFields)
+
+	// Message should be extracted from msg field
+	if result.Message != "test" {
+		t.Errorf("message = %q, want %q", result.Message, "test")
+	}
+
+	// Attributes should be capped at maxAttributes (20)
+	// Note: msg was moved to Message, so it doesn't count
+	if len(result.Attributes) > maxAttributes {
+		t.Errorf("attributes count = %d, want <= %d", len(result.Attributes), maxAttributes)
+	}
+
+	// Should have extracted the level field at minimum
+	if _, ok := result.Attributes["level"]; !ok {
+		t.Errorf("expected level attribute to be extracted")
+	}
+}
+
+func TestParser_ExtractsAllScalarFields(t *testing.T) {
+	parser := NewParser()
+
+	// JSON with various field types
+	line := `2024-01-15T10:30:00Z {"level":"INFO","msg":"test","count":42,"enabled":true,"ratio":3.14,"nested":{"skip":"this"},"array":["skip","this"]}`
+
+	result := parser.Parse(line)
+
+	if result.Message != "test" {
+		t.Errorf("message = %q, want %q", result.Message, "test")
+	}
+
+	// Should extract scalar fields
+	expected := map[string]string{
+		"level":   "INFO",
+		"count":   "42",
+		"enabled": "true",
+		"ratio":   "3.14",
+	}
+
+	for key, wantVal := range expected {
+		if gotVal, ok := result.Attributes[key]; !ok {
+			t.Errorf("missing attribute %q", key)
+		} else if gotVal != wantVal {
+			t.Errorf("attribute[%q] = %q, want %q", key, gotVal, wantVal)
+		}
+	}
+
+	// Should NOT extract nested objects or arrays
+	if _, ok := result.Attributes["nested"]; ok {
+		t.Errorf("should not extract nested objects")
+	}
+	if _, ok := result.Attributes["array"]; ok {
+		t.Errorf("should not extract arrays")
 	}
 }
