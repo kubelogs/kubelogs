@@ -286,16 +286,22 @@ func (b *Batcher) processRetryQueue(ctx context.Context) {
 }
 
 func (b *Batcher) convertToEntry(line LogLine) storage.LogEntry {
+	// Start with extracted attributes from parsed log (may be nil)
+	attrs := line.Attributes
+	if attrs == nil {
+		attrs = make(map[string]string, 1)
+	}
+	// Always add pod_uid
+	attrs["pod_uid"] = line.Container.PodUID
+
 	return storage.LogEntry{
-		Timestamp: line.Timestamp,
-		Namespace: line.Container.Namespace,
-		Pod:       line.Container.PodName,
-		Container: line.Container.ContainerName,
-		Severity:  line.Severity,
-		Message:   line.Message,
-		Attributes: map[string]string{
-			"pod_uid": line.Container.PodUID,
-		},
+		Timestamp:  line.Timestamp,
+		Namespace:  line.Container.Namespace,
+		Pod:        line.Container.PodName,
+		Container:  line.Container.ContainerName,
+		Severity:   line.Severity,
+		Message:    line.Message,
+		Attributes: attrs,
 	}
 }
 

@@ -32,10 +32,11 @@ func (c ContainerRef) Key() string {
 
 // LogLine represents a parsed log line from a container.
 type LogLine struct {
-	Container ContainerRef
-	Timestamp time.Time
-	Severity  storage.Severity
-	Message   string
+	Container  ContainerRef
+	Timestamp  time.Time
+	Severity   storage.Severity
+	Message    string
+	Attributes map[string]string // Extracted structured fields (nil if none)
 }
 
 // Stream reads logs from a single container.
@@ -155,12 +156,13 @@ func (s *Stream) run(ctx context.Context) error {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		timestamp, severity, message := s.parser.Parse(line)
+		result := s.parser.Parse(line)
 		logLine := LogLine{
-			Container: s.ref,
-			Timestamp: timestamp,
-			Severity:  severity,
-			Message:   message,
+			Container:  s.ref,
+			Timestamp:  result.Timestamp,
+			Severity:   result.Severity,
+			Message:    result.Message,
+			Attributes: result.Attributes,
 		}
 
 		select {
