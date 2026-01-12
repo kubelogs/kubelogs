@@ -154,6 +154,7 @@ Supports multiple log formats (case-insensitive):
 | Format | Example | Detection Pattern |
 |--------|---------|-------------------|
 | JSON | `{"level":"INFO"}` | `"level": "INFO"` |
+| Logfmt | `level=info msg="test"` | `level=info` |
 | Bracket | `[ERROR] Failed` | `[ERROR]` |
 | Key-value | `level=WARN msg=...` | `level=WARN` |
 | Prefix | `INFO: Starting` | `INFO:` |
@@ -185,6 +186,23 @@ Extracted attributes:
 ```
 
 These attributes are stored in the `attributes` JSON column and can be queried using attribute filters. Only scalar values (strings, numbers, booleans) are extracted; nested objects and arrays are skipped.
+
+**Structured Log Parsing (Logfmt):**
+
+Logfmt is a structured logging format using `key=value` pairs. The parser extracts the same well-known fields as JSON:
+
+```
+level=info msg="request handled" trace_id=abc123 service=api duration=50ms
+```
+
+Logfmt values can be:
+- Unquoted: `key=value` (ends at whitespace)
+- Quoted: `key="value with spaces"` (supports escape sequences: `\"`, `\\`, `\n`, `\t`, `\r`)
+
+Extracted attributes:
+```json
+{"msg": "request handled", "trace_id": "abc123", "service": "api"}
+```
 
 ### Batcher (`batcher.go`)
 

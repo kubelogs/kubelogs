@@ -110,6 +110,11 @@ func (p *Parser) parseStructured(message string) (storage.Severity, map[string]s
 		return severity, attrs
 	}
 
+	// Try logfmt parsing second
+	if severity, attrs := p.parseLogfmt(message); severity != storage.SeverityUnknown || attrs != nil {
+		return severity, attrs
+	}
+
 	// Try regex patterns for unstructured logs (case-insensitive)
 	for _, pattern := range p.severityPatterns {
 		if matches := pattern.regex.FindStringSubmatch(message); len(matches) > 1 {
@@ -198,4 +203,169 @@ func stringifyValue(val any) string {
 		// Skip arrays, objects, null
 		return ""
 	}
+}
+
+// parseLogfmt parses a logfmt log line and extracts severity and well-known fields.
+// Logfmt format: key=value key2="quoted value" key3=unquoted
+func (p *Parser) parseLogfmt(message string) (storage.Severity, map[string]string) {
+	// Quick check - must contain = and not be JSON
+	if !strings.Contains(message, "=") || (len(message) > 0 && message[0] == '{') {
+		return storage.SeverityUnknown, nil
+	}
+
+	// Parse key=value pairs
+	fields := parseLogfmtFields(message)
+	if len(fields) == 0 {
+		return storage.SeverityUnknown, nil
+	}
+
+	// Extract severity from common field names
+	severity := storage.SeverityUnknown
+	for _, key := range []string{"level", "severity", "lvl"} {
+		if val, ok := fields[key]; ok && val != "" {
+			severity = storage.ParseSeverity(val)
+			if severity != storage.SeverityUnknown {
+				break
+			}
+		}
+	}
+
+	// Extract well-known fields into attributes
+	attrs := extractLogfmtAttrs(fields)
+
+	return severity, attrs
+}
+
+// parseLogfmtFields parses logfmt key=value pairs from a message.
+// Handles both unquoted values (key=value) and quoted values (key="value with spaces").
+func parseLogfmtFields(message string) map[string]string {
+	fields := make(map[string]string)
+	i := 0
+	n := len(message)
+
+	for i < n {
+		// Skip whitespace
+		for i < n && (message[i] == ' ' || message[i] == '\t') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+
+		// Parse key (alphanumeric, underscore, hyphen, dot)
+		keyStart := i
+		for i < n && isKeyChar(message[i]) {
+			i++
+		}
+		if i == keyStart || i >= n || message[i] != '=' {
+			// Not a valid key=value, skip to next space
+			for i < n && message[i] != ' ' && message[i] != '\t' {
+				i++
+			}
+			continue
+		}
+
+		key := message[keyStart:i]
+		i++ // skip '='
+
+		if i >= n {
+			fields[key] = ""
+			break
+		}
+
+		// Parse value
+		var value string
+		if message[i] == '"' {
+			// Quoted value
+			i++ // skip opening quote
+			valueStart := i
+			for i < n {
+				if message[i] == '\\' && i+1 < n {
+					i += 2 // skip escaped char
+					continue
+				}
+				if message[i] == '"' {
+					break
+				}
+				i++
+			}
+			value = unescapeLogfmtValue(message[valueStart:i])
+			if i < n && message[i] == '"' {
+				i++ // skip closing quote
+			}
+		} else {
+			// Unquoted value - ends at space or EOL
+			valueStart := i
+			for i < n && message[i] != ' ' && message[i] != '\t' {
+				i++
+			}
+			value = message[valueStart:i]
+		}
+
+		fields[key] = value
+	}
+
+	return fields
+}
+
+// isKeyChar returns true if c is a valid logfmt key character.
+func isKeyChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == '_' || c == '-' || c == '.'
+}
+
+// unescapeLogfmtValue handles escape sequences in quoted logfmt values.
+func unescapeLogfmtValue(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			next := s[i+1]
+			switch next {
+			case '"', '\\':
+				result.WriteByte(next)
+			case 'n':
+				result.WriteByte('\n')
+			case 't':
+				result.WriteByte('\t')
+			case 'r':
+				result.WriteByte('\r')
+			default:
+				result.WriteByte(next)
+			}
+			i++
+		} else {
+			result.WriteByte(s[i])
+		}
+	}
+
+	return result.String()
+}
+
+// extractLogfmtAttrs extracts well-known fields from parsed logfmt fields.
+func extractLogfmtAttrs(fields map[string]string) map[string]string {
+	attrs := make(map[string]string)
+
+	for canonicalName, aliases := range jsonFieldAliases {
+		for _, alias := range aliases {
+			if val, ok := fields[alias]; ok && val != "" {
+				attrs[canonicalName] = val
+				break // Use first match
+			}
+		}
+	}
+
+	// Return nil if no fields extracted (saves memory)
+	if len(attrs) == 0 {
+		return nil
+	}
+
+	return attrs
 }
