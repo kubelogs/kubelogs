@@ -20,7 +20,7 @@ import (
 func main() {
 	// Initialize logger
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: slog.LevelDebug,
 	})))
 
 	// Load collector configuration
