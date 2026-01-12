@@ -46,10 +46,14 @@ END;
 `
 
 // pragmaSQL contains performance-critical SQLite settings.
+// Uses DELETE journal mode instead of WAL for compatibility with
+// network-attached storage (Longhorn, NFS, etc.) where WAL's shared
+// memory files can cause I/O errors.
 const pragmaSQL = `
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
+PRAGMA journal_mode = DELETE;
+PRAGMA synchronous = FULL;
+PRAGMA locking_mode = EXCLUSIVE;
 PRAGMA cache_size = -64000;
 PRAGMA temp_store = MEMORY;
-PRAGMA busy_timeout = 5000;
+PRAGMA busy_timeout = 10000;
 `
