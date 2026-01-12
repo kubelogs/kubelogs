@@ -22,6 +22,8 @@ function app() {
         oldestLoadedId: null,    // Cursor for backward pagination
         hasMoreOlder: true,      // Whether more historical entries exist
         loadingOlder: false,     // Prevent concurrent requests
+        selectedEntry: null,     // Currently selected log entry for detail panel
+        detailPanelOpen: false,  // Whether detail panel is visible
 
         init() {
             this.loadFilters();
@@ -328,6 +330,18 @@ function app() {
                     e.preventDefault();
                     this.loadOlderEntries();
                     break;
+                case 'j':
+                    e.preventDefault();
+                    if (this.detailPanelOpen) {
+                        this.navigateEntry('next');
+                    }
+                    break;
+                case 'k':
+                    e.preventDefault();
+                    if (this.detailPanelOpen) {
+                        this.navigateEntry('prev');
+                    }
+                    break;
                 case '1':
                 case '2':
                 case '3':
@@ -340,7 +354,9 @@ function app() {
                     break;
                 case 'Escape':
                     e.preventDefault();
-                    if (this.showShortcuts) {
+                    if (this.detailPanelOpen) {
+                        this.closeDetailPanel();
+                    } else if (this.showShortcuts) {
                         this.showShortcuts = false;
                     } else {
                         this.filters = { namespace: '', container: '', minSeverity: 0, search: '', timeSpan: 'live' };
@@ -380,6 +396,40 @@ function app() {
             if (s >= 5) return 'bg-red-900/20';   // Error
             if (s >= 4) return 'bg-yellow-900/10'; // Warn
             return '';
+        },
+
+        selectEntry(entry) {
+            this.selectedEntry = entry;
+            this.detailPanelOpen = true;
+        },
+
+        closeDetailPanel() {
+            this.detailPanelOpen = false;
+        },
+
+        truncateValue(value, maxLen = 12) {
+            if (!value) return '';
+            if (value.length <= maxLen) return value;
+            return value.substring(0, maxLen - 1) + '…';
+        },
+
+        navigateEntry(direction) {
+            if (!this.selectedEntry || this.entries.length === 0) return;
+
+            const currentIndex = this.entries.findIndex(e => e.id === this.selectedEntry.id);
+            if (currentIndex === -1) return;
+
+            const newIndex = direction === 'next'
+                ? Math.min(currentIndex + 1, this.entries.length - 1)
+                : Math.max(currentIndex - 1, 0);
+
+            this.selectedEntry = this.entries[newIndex];
+
+            // Scroll selected row into view
+            this.$nextTick(() => {
+                const row = this.$refs.logContainer?.querySelector(`tr[data-id="${this.selectedEntry.id}"]`);
+                row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            });
         }
     };
 }

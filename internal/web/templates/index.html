@@ -144,7 +144,9 @@
     </header>
 
     <!-- Log entries -->
-    <main class="flex-1 overflow-auto font-mono text-sm" x-ref="logContainer" @scroll="handleScroll($event)">
+    <main class="flex-1 overflow-auto font-mono text-sm transition-all duration-300"
+          :class="detailPanelOpen ? 'mr-96' : ''"
+          x-ref="logContainer" @scroll="handleScroll($event)">
         <!-- Loading older entries indicator -->
         <div x-show="loadingOlder"
              class="sticky top-0 z-10 bg-gray-800 text-center py-2 text-sm text-gray-400 border-b border-gray-700">
@@ -157,13 +159,16 @@
                     <th class="px-2 py-2 text-left w-44">Timestamp</th>
                     <th class="px-2 py-2 text-left w-32">Container</th>
                     <th class="px-2 py-2 text-left w-16">Level</th>
+                    <th class="px-2 py-2 text-left w-56">Attributes</th>
                     <th class="px-2 py-2 text-left">Message</th>
                 </tr>
             </thead>
             <tbody>
                 <template x-for="entry in entries" :key="entry.id">
-                    <tr class="hover:bg-gray-800/50 border-b border-gray-800/50"
-                        :class="severityRowClass(entry.severity)">
+                    <tr class="hover:bg-gray-800/50 border-b border-gray-800/50 cursor-pointer"
+                        :class="[severityRowClass(entry.severity), selectedEntry?.id === entry.id ? 'bg-blue-900/30' : '']"
+                        :data-id="entry.id"
+                        @click="selectEntry(entry)">
                         <td class="px-2 py-1 text-gray-500 whitespace-nowrap align-top"
                             x-text="formatTimestamp(entry.timestamp)"></td>
                         <td class="px-2 py-1 text-blue-400 whitespace-nowrap align-top truncate max-w-32"
@@ -172,6 +177,20 @@
                         <td class="px-2 py-1 whitespace-nowrap align-top font-semibold"
                             :class="severityClass(entry.severity)"
                             x-text="severityLabel(entry.severity)"></td>
+                        <td class="px-2 py-1 align-top max-w-56">
+                            <template x-if="entry.attrs && Object.keys(entry.attrs).length > 0">
+                                <span class="text-xs flex flex-wrap gap-1">
+                                    <template x-for="(val, key, idx) in entry.attrs" :key="key">
+                                        <span x-show="idx < 2" class="inline-flex bg-gray-700 rounded px-1.5 py-0.5">
+                                            <span class="text-gray-500" x-text="key + '='"></span>
+                                            <span class="text-gray-300" x-text="truncateValue(val)"></span>
+                                        </span>
+                                    </template>
+                                    <span x-show="Object.keys(entry.attrs).length > 2"
+                                          class="text-gray-500 px-1">+<span x-text="Object.keys(entry.attrs).length - 2"></span></span>
+                                </span>
+                            </template>
+                        </td>
                         <td class="px-2 py-1 whitespace-pre-wrap break-all text-gray-200"
                             x-text="entry.message"></td>
                     </tr>
@@ -187,6 +206,104 @@
             </div>
         </div>
     </main>
+
+    <!-- Detail Panel (slide-in from right) -->
+    <aside x-show="detailPanelOpen"
+           x-transition:enter="transition ease-out duration-300"
+           x-transition:enter-start="translate-x-full"
+           x-transition:enter-end="translate-x-0"
+           x-transition:leave="transition ease-in duration-200"
+           x-transition:leave-start="translate-x-0"
+           x-transition:leave-end="translate-x-full"
+           class="fixed right-0 top-0 h-full w-96 bg-gray-800 border-l border-gray-700 shadow-xl z-40 flex flex-col overflow-hidden"
+           @click.outside="closeDetailPanel()">
+
+        <!-- Panel Header -->
+        <div class="flex items-center justify-between px-4 py-3 border-b border-gray-700 bg-gray-800">
+            <h2 class="text-lg font-semibold">Log Details</h2>
+            <button @click="closeDetailPanel()"
+                    class="text-gray-400 hover:text-white p-1 rounded hover:bg-gray-700"
+                    aria-label="Close panel">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Panel Content -->
+        <div class="flex-1 overflow-auto p-4 space-y-4" x-show="selectedEntry">
+            <!-- Timestamp -->
+            <div>
+                <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Timestamp</dt>
+                <dd class="text-gray-200 font-mono text-sm" x-text="formatTimestamp(selectedEntry?.timestamp)"></dd>
+            </div>
+
+            <!-- Kubernetes Context -->
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Namespace</dt>
+                    <dd class="text-blue-400 font-mono text-sm" x-text="selectedEntry?.namespace || '-'"></dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Pod</dt>
+                    <dd class="text-blue-400 font-mono text-sm truncate"
+                        :title="selectedEntry?.pod"
+                        x-text="selectedEntry?.pod || '-'"></dd>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Container</dt>
+                    <dd class="text-blue-400 font-mono text-sm" x-text="selectedEntry?.container || '-'"></dd>
+                </div>
+                <div>
+                    <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Level</dt>
+                    <dd class="font-mono text-sm font-semibold"
+                        :class="severityClass(selectedEntry?.severity)"
+                        x-text="severityLabel(selectedEntry?.severity)"></dd>
+                </div>
+            </div>
+
+            <!-- Message -->
+            <div>
+                <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Message</dt>
+                <dd class="text-gray-200 font-mono text-sm whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-48 overflow-auto"
+                    x-text="selectedEntry?.message"></dd>
+            </div>
+
+            <!-- Attributes -->
+            <div x-show="selectedEntry?.attrs && Object.keys(selectedEntry.attrs).length > 0">
+                <dt class="text-xs text-gray-500 uppercase tracking-wide mb-2">
+                    Attributes
+                    <span class="text-gray-600" x-text="'(' + Object.keys(selectedEntry?.attrs || {}).length + ')'"></span>
+                </dt>
+                <dd class="space-y-1">
+                    <template x-for="(val, key) in selectedEntry?.attrs || {}" :key="key">
+                        <div class="flex bg-gray-900 rounded px-2 py-1.5 font-mono text-sm">
+                            <span class="text-purple-400 mr-2 flex-shrink-0" x-text="key"></span>
+                            <span class="text-gray-300 break-all" x-text="val"></span>
+                        </div>
+                    </template>
+                </dd>
+            </div>
+
+            <!-- No Attributes State -->
+            <div x-show="!selectedEntry?.attrs || Object.keys(selectedEntry.attrs).length === 0"
+                 class="text-gray-500 text-sm italic">
+                No attributes available
+            </div>
+        </div>
+
+        <!-- Panel Footer with Navigation -->
+        <div class="px-4 py-3 border-t border-gray-700 bg-gray-800 flex justify-between items-center text-sm text-gray-400">
+            <span>Press <kbd class="bg-gray-700 px-1.5 py-0.5 rounded text-xs">Esc</kbd> to close</span>
+            <span>
+                <kbd class="bg-gray-700 px-1.5 py-0.5 rounded text-xs">j</kbd>
+                <kbd class="bg-gray-700 px-1.5 py-0.5 rounded text-xs">k</kbd> navigate
+            </span>
+        </div>
+    </aside>
 
     <!-- Connection status - only in Live mode -->
     <div x-show="!connected && filters.timeSpan === 'live'"
@@ -250,8 +367,11 @@
                 <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">1-6</kbd></dt>
                 <dd class="text-gray-400">Set severity filter</dd>
 
+                <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">j</kbd> / <kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">k</kbd></dt>
+                <dd class="text-gray-400">Navigate entries (in panel)</dd>
+
                 <dt><kbd class="bg-gray-700 px-2 py-0.5 rounded font-mono">Esc</kbd></dt>
-                <dd class="text-gray-400">Clear filters / Close modal</dd>
+                <dd class="text-gray-400">Close panel / Clear filters</dd>
             </dl>
             <button @click="showShortcuts = false"
                     class="mt-6 w-full bg-gray-700 hover:bg-gray-600 py-2 rounded transition-colors">
