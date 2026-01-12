@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -169,6 +170,12 @@ func (s *Stream) run(ctx context.Context) error {
 			s.mu.Unlock()
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-time.After(10 * time.Second):
+			// Output channel is full - log warning and continue
+			// This prevents the stream from blocking indefinitely
+			slog.Warn("output channel full, dropping log line",
+				"container", s.ref.Key(),
+			)
 		}
 	}
 

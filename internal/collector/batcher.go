@@ -86,6 +86,9 @@ func (b *Batcher) Run(ctx context.Context) error {
 	retryTicker := time.NewTicker(b.backoff)
 	defer retryTicker.Stop()
 
+	healthTicker := time.NewTicker(60 * time.Second)
+	defer healthTicker.Stop()
+
 	for {
 		select {
 		case line, ok := <-b.input:
@@ -128,6 +131,18 @@ func (b *Batcher) Run(ctx context.Context) error {
 			currentBackoff := b.backoff
 			b.retryMu.Unlock()
 			retryTicker.Reset(currentBackoff)
+
+		case <-healthTicker.C:
+			// Periodic health check - log warning if circuit is open or retry queue has items
+			stats := b.Stats()
+			if stats.CircuitOpen || stats.RetryQueueSize > 0 {
+				slog.Warn("batcher health check",
+					"circuitOpen", stats.CircuitOpen,
+					"retryQueueSize", stats.RetryQueueSize,
+					"writeErrors", stats.WriteErrors,
+					"totalWrites", stats.TotalWrites,
+				)
+			}
 
 		case <-ctx.Done():
 			// Graceful shutdown - flush remaining with timeout

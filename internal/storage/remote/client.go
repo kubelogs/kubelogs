@@ -42,12 +42,16 @@ func NewClient(addr string) (*Client, error) {
 
 // Write persists a batch of log entries.
 func (c *Client) Write(ctx context.Context, entries storage.LogBatch) (int, error) {
+	// Add timeout to prevent indefinite blocking on gRPC calls
+	writeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	pbEntries := make([]*storagepb.LogEntry, len(entries))
 	for i, e := range entries {
 		pbEntries[i] = toProtoEntry(e)
 	}
 
-	resp, err := c.client.Write(ctx, &storagepb.WriteRequest{Entries: pbEntries})
+	resp, err := c.client.Write(writeCtx, &storagepb.WriteRequest{Entries: pbEntries})
 	if err != nil {
 		return 0, err
 	}
