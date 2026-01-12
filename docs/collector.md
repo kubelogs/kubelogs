@@ -31,7 +31,8 @@ The Collector is a DaemonSet component that tails container logs via the Kuberne
 │                       ┌─────────────────┐                               │
 │                       │     Parser      │                               │
 │                       │  (timestamp,    │                               │
-│                       │   severity)     │                               │
+│                       │   severity,     │                               │
+│                       │   attributes)   │                               │
 │                       └─────────────────┘                               │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -158,6 +159,32 @@ Supports multiple log formats (case-insensitive):
 | Prefix | `INFO: Starting` | `INFO:` |
 
 Severity levels: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`
+
+**Structured Log Parsing (JSON):**
+
+For JSON-formatted logs, the parser extracts well-known fields into the `Attributes` map for filtering and correlation:
+
+| Canonical Field | Aliases | Description |
+|-----------------|---------|-------------|
+| `msg` | msg, message, error, err | Log message content |
+| `trace_id` | trace_id, traceId, trace-id, traceID | Distributed trace ID |
+| `span_id` | span_id, spanId, span-id, spanID | Span ID for tracing |
+| `request_id` | request_id, requestId, request-id, requestID, req_id | Request correlation ID |
+| `caller` | caller, source, file, location | Source code location |
+| `service` | service, app, application | Service/app name |
+| `user_id` | user_id, userId, user | User identifier |
+
+Example JSON log:
+```json
+{"level":"ERROR","msg":"connection failed","trace_id":"abc123","service":"api"}
+```
+
+Extracted attributes:
+```json
+{"msg": "connection failed", "trace_id": "abc123", "service": "api"}
+```
+
+These attributes are stored in the `attributes` JSON column and can be queried using attribute filters. Only scalar values (strings, numbers, booleans) are extracted; nested objects and arrays are skipped.
 
 ### Batcher (`batcher.go`)
 
