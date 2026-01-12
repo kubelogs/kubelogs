@@ -32,6 +32,7 @@ type Config struct {
 
 	// SinceTime starts collecting logs from this time.
 	// Zero means collect from pod start.
+	// Default: 15 minutes.
 	SinceTime time.Time
 
 	// ExcludeNamespaces skips these namespaces.
@@ -56,6 +57,7 @@ func DefaultConfig() Config {
 		StreamBufferSize:     1000,
 		ExcludeNamespaces:    []string{"kube-system"},
 		ShutdownTimeout:      30 * time.Second,
+		SinceTime:            time.Now().Add(-(15 * time.Minute)),
 	}
 }
 
