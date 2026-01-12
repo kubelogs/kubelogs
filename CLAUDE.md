@@ -18,7 +18,7 @@ make test     # Run tests
 Three main components in a single binary:
 
 - **Collector** (DaemonSet): Tails container logs via Kubernetes API, accepts OTLP and Fluent Forward protocols
-- **Store**: Embedded DuckDB for small clusters (<10GB/day), S3-compatible storage for scale
+- **Store**: Embedded SQLite with FTS5 full-text search
 - **Web UI**: Built-in search/filter interface, no external dependencies
 
 ## Key Design Constraints
