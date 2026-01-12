@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -48,20 +49,42 @@ func New(cfg Config) (*Store, error) {
 		cfg.WriteBufferSize = defaultWriteBuffer
 	}
 
+	// Clean up stale WAL mode files before opening. These can cause
+	// SQLITE_IOERR_SHMSIZE errors if left over from a previous crash
+	// when the database was in WAL mode.
+	if cfg.Path != ":memory:" {
+		os.Remove(cfg.Path + "-shm")
+		os.Remove(cfg.Path + "-wal")
+	}
+
 	db, err := sql.Open("sqlite", cfg.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	// SQLite works best with a single connection in WAL mode,
-	// especially on network-backed storage (PVCs).
+	// SQLite works best with a single connection for write serialization.
+	// Set a connection lifetime to force periodic recycling - this helps
+	// recover from corrupted connection state in modernc.org/sqlite.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(0)
+	db.SetConnMaxLifetime(time.Hour)
 
 	if _, err := db.Exec(pragmaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("set pragmas: %w", err)
+	}
+
+	// Verify journal mode was set correctly. PRAGMA journal_mode doesn't
+	// error on failure - it returns the actual mode instead.
+	// In-memory databases always use "memory" journal mode.
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("check journal_mode: %w", err)
+	}
+	if cfg.Path != ":memory:" && journalMode != "delete" {
+		db.Close()
+		return nil, fmt.Errorf("failed to set journal_mode=DELETE, got %q", journalMode)
 	}
 
 	if _, err := db.Exec(schemaSQL); err != nil {
