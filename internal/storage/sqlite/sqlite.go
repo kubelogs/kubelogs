@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -461,9 +462,15 @@ func buildQuery(q storage.Query) (string, []any) {
 		args = append(args, q.MinSeverity)
 	}
 
-	for k, v := range q.Attributes {
+	// Sort attribute keys for deterministic query building
+	attrKeys := make([]string, 0, len(q.Attributes))
+	for k := range q.Attributes {
+		attrKeys = append(attrKeys, k)
+	}
+	sort.Strings(attrKeys)
+	for _, k := range attrKeys {
 		sql.WriteString(" AND json_extract(l.attributes, ?) = ?")
-		args = append(args, "$."+k, v)
+		args = append(args, "$."+k, q.Attributes[k])
 	}
 
 	if q.Pagination.AfterID > 0 {
