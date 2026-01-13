@@ -219,19 +219,26 @@
             <!-- Timestamp -->
             <div>
                 <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Timestamp</dt>
-                <dd class="text-gray-200 font-mono text-sm" x-text="formatTimestamp(selectedEntry?.timestamp)"></dd>
+                <dd class="text-gray-200 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
+                    @click="copyToClipboard(formatTimestamp(selectedEntry?.timestamp))"
+                    title="Click to copy"
+                    x-text="formatTimestamp(selectedEntry?.timestamp)"></dd>
             </div>
 
             <!-- Kubernetes Context -->
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Namespace</dt>
-                    <dd class="text-blue-400 font-mono text-sm" x-text="selectedEntry?.namespace || '-'"></dd>
+                    <dd class="text-blue-400 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
+                        @click="copyToClipboard(selectedEntry?.namespace)"
+                        title="Click to copy"
+                        x-text="selectedEntry?.namespace || '-'"></dd>
                 </div>
                 <div>
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Pod</dt>
-                    <dd class="text-blue-400 font-mono text-sm truncate"
-                        :title="selectedEntry?.pod"
+                    <dd class="text-blue-400 font-mono text-sm truncate cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
+                        @click="copyToClipboard(selectedEntry?.pod)"
+                        title="Click to copy"
                         x-text="selectedEntry?.pod || '-'"></dd>
                 </div>
             </div>
@@ -239,12 +246,17 @@
             <div class="grid grid-cols-2 gap-4">
                 <div>
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Container</dt>
-                    <dd class="text-blue-400 font-mono text-sm" x-text="selectedEntry?.container || '-'"></dd>
+                    <dd class="text-blue-400 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
+                        @click="copyToClipboard(selectedEntry?.container)"
+                        title="Click to copy"
+                        x-text="selectedEntry?.container || '-'"></dd>
                 </div>
                 <div>
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Level</dt>
-                    <dd class="font-mono text-sm font-semibold"
+                    <dd class="font-mono text-sm font-semibold cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
                         :class="severityClass(selectedEntry?.severity)"
+                        @click="copyToClipboard(severityLabel(selectedEntry?.severity))"
+                        title="Click to copy"
                         x-text="severityLabel(selectedEntry?.severity)"></dd>
                 </div>
             </div>
@@ -252,7 +264,9 @@
             <!-- Message -->
             <div>
                 <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Message</dt>
-                <dd class="text-gray-200 font-mono text-sm whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-48 overflow-auto"
+                <dd class="text-gray-200 font-mono text-sm whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-48 overflow-auto cursor-pointer hover:bg-gray-800 transition-colors"
+                    @click="copyToClipboard(selectedEntry?.message)"
+                    title="Click to copy"
                     x-text="selectedEntry?.message"></dd>
             </div>
 
@@ -264,7 +278,9 @@
                 </dt>
                 <dd class="space-y-1">
                     <template x-for="(val, key) in selectedEntry?.attrs || {}" :key="key">
-                        <div class="flex bg-gray-900 rounded px-2 py-1.5 font-mono text-sm">
+                        <div class="flex bg-gray-900 rounded px-2 py-1.5 font-mono text-sm cursor-pointer hover:bg-gray-800 transition-colors"
+                             @click="copyToClipboard(val)"
+                             title="Click to copy value">
                             <span class="text-purple-400 mr-2 flex-shrink-0" x-text="key"></span>
                             <span class="text-gray-300 break-all" x-text="val"></span>
                         </div>
@@ -288,6 +304,18 @@
             </span>
         </div>
     </aside>
+
+    <!-- Copy confirmation toast -->
+    <div x-show="showCopyToast"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0 translate-y-2"
+         x-transition:enter-end="opacity-100 translate-y-0"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100 translate-y-0"
+         x-transition:leave-end="opacity-0 translate-y-2"
+         class="fixed bottom-4 right-4 bg-green-600 text-white px-3 py-2 rounded shadow-lg text-sm z-50">
+        Copied to clipboard
+    </div>
 
     <!-- Connection status - only in Live mode -->
     <div x-show="!connected && filters.timeSpan === 'live'"

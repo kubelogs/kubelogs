@@ -24,6 +24,7 @@ function app() {
         loadingOlder: false,     // Prevent concurrent requests
         selectedEntry: null,     // Currently selected log entry for detail panel
         detailPanelOpen: false,  // Whether detail panel is visible
+        showCopyToast: false,    // Whether to show "Copied" toast
 
         init() {
             this.loadFilters();
@@ -430,6 +431,17 @@ function app() {
                 const row = this.$refs.logContainer?.querySelector(`tr[data-id="${this.selectedEntry.id}"]`);
                 row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             });
+        },
+
+        async copyToClipboard(value) {
+            if (!value) return;
+            try {
+                await navigator.clipboard.writeText(String(value));
+                this.showCopyToast = true;
+                setTimeout(() => this.showCopyToast = false, 1500);
+            } catch (err) {
+                console.error('Failed to copy:', err);
+            }
         }
     };
 }
