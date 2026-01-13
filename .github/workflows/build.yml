@@ -29,7 +29,7 @@ jobs:
           cache: true
 
       - name: Run tests
-        run: go test -v -race ./...
+        run: go test -tags "fts5" -v -race ./...
 
   build:
     name: Build ${{ matrix.service }}
