@@ -41,11 +41,12 @@ type LogLine struct {
 
 // Stream reads logs from a single container.
 type Stream struct {
-	ref       ContainerRef
-	clientset kubernetes.Interface
-	output    chan<- LogLine
-	parser    *Parser
-	sinceTime time.Time
+	ref         ContainerRef
+	clientset   kubernetes.Interface
+	output      chan<- LogLine
+	parser      *Parser
+	sinceTime   time.Time
+	idleTimeout time.Duration
 
 	mu        sync.Mutex
 	running   bool
@@ -72,13 +73,15 @@ func NewStream(
 	output chan<- LogLine,
 	parser *Parser,
 	sinceTime time.Time,
+	idleTimeout time.Duration,
 ) *Stream {
 	return &Stream{
-		ref:       ref,
-		clientset: clientset,
-		output:    output,
-		parser:    parser,
-		sinceTime: sinceTime,
+		ref:         ref,
+		clientset:   clientset,
+		output:      output,
+		parser:      parser,
+		sinceTime:   sinceTime,
+		idleTimeout: idleTimeout,
 	}
 }
 
@@ -153,39 +156,76 @@ func (s *Stream) run(ctx context.Context) error {
 	// Increase buffer size for long log lines
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	// Channel for scanner results - allows timeout detection
+	type scanResult struct {
+		hasNext bool
+		line    string
+	}
+	scanCh := make(chan scanResult, 1)
 
-		result := s.parser.Parse(line)
-		logLine := LogLine{
-			Container:  s.ref,
-			Timestamp:  result.Timestamp,
-			Severity:   result.Severity,
-			Message:    result.Message,
-			Attributes: result.Attributes,
-		}
-
+	// scanNext runs scanner.Scan() in a goroutine with timeout detection
+	scanNext := func() {
+		hasNext := scanner.Scan()
 		select {
-		case s.output <- logLine:
-			s.mu.Lock()
-			s.linesRead++
-			s.mu.Unlock()
+		case scanCh <- scanResult{hasNext: hasNext, line: scanner.Text()}:
+		case <-ctx.Done():
+			// Context cancelled, goroutine will exit when scanCh is GC'd
+		}
+	}
+
+	// Start first scan
+	go scanNext()
+
+	for {
+		select {
+		case result := <-scanCh:
+			if !result.hasNext {
+				// Scanner finished - check for errors
+				if err := scanner.Err(); err != nil {
+					return fmt.Errorf("read log stream: %w", err)
+				}
+				return nil // Stream ended normally (pod terminated)
+			}
+
+			// Parse and send the log line
+			parsed := s.parser.Parse(result.line)
+			logLine := LogLine{
+				Container:  s.ref,
+				Timestamp:  parsed.Timestamp,
+				Severity:   parsed.Severity,
+				Message:    parsed.Message,
+				Attributes: parsed.Attributes,
+			}
+
+			select {
+			case s.output <- logLine:
+				s.mu.Lock()
+				s.linesRead++
+				s.mu.Unlock()
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(10 * time.Second):
+				// Output channel is full - log warning and continue
+				slog.Warn("output channel full, dropping log line",
+					"container", s.ref.Key(),
+				)
+			}
+
+			// Start next scan
+			go scanNext()
+
+		case <-time.After(s.idleTimeout):
+			// No log line received within idle timeout - connection may be stale
+			slog.Warn("stream idle timeout, reconnecting",
+				"container", s.ref.Key(),
+				"idleTimeout", s.idleTimeout,
+			)
+			return fmt.Errorf("stream idle timeout after %v", s.idleTimeout)
+
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(10 * time.Second):
-			// Output channel is full - log warning and continue
-			// This prevents the stream from blocking indefinitely
-			slog.Warn("output channel full, dropping log line",
-				"container", s.ref.Key(),
-			)
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read log stream: %w", err)
-	}
-
-	return nil // Stream ended normally (pod terminated)
 }
 
 // Stats returns stream statistics.

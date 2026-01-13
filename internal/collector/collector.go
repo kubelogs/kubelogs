@@ -63,6 +63,7 @@ func (c *Collector) Start(ctx context.Context) error {
 		c.config.MaxConcurrentStreams,
 		c.config.StreamBufferSize,
 		c.config.SinceTime,
+		c.config.StreamIdleTimeout,
 	)
 	c.streamManager.Start(c.ctx)
 

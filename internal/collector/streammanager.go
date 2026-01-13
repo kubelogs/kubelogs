@@ -11,12 +11,13 @@ import (
 
 // StreamManager coordinates multiple log streams with resource limits.
 type StreamManager struct {
-	clientset  kubernetes.Interface
-	output     chan LogLine
-	maxStreams int
-	bufferSize int
-	sinceTime  time.Time
-	parser     *Parser
+	clientset   kubernetes.Interface
+	output      chan LogLine
+	maxStreams  int
+	bufferSize  int
+	sinceTime   time.Time
+	idleTimeout time.Duration
+	parser      *Parser
 
 	mu      sync.RWMutex
 	streams map[string]*managedStream
@@ -41,16 +42,18 @@ func NewStreamManager(
 	maxStreams int,
 	bufferSize int,
 	sinceTime time.Time,
+	idleTimeout time.Duration,
 ) *StreamManager {
 	return &StreamManager{
-		clientset:  clientset,
-		output:     make(chan LogLine, bufferSize*10),
-		maxStreams: maxStreams,
-		bufferSize: bufferSize,
-		sinceTime:  sinceTime,
-		parser:     NewParser(),
-		streams:    make(map[string]*managedStream),
-		streamSem:  make(chan struct{}, maxStreams),
+		clientset:   clientset,
+		output:      make(chan LogLine, bufferSize*10),
+		maxStreams:  maxStreams,
+		bufferSize:  bufferSize,
+		sinceTime:   sinceTime,
+		idleTimeout: idleTimeout,
+		parser:      NewParser(),
+		streams:     make(map[string]*managedStream),
+		streamSem:   make(chan struct{}, maxStreams),
 	}
 }
 
@@ -87,7 +90,7 @@ func (m *StreamManager) StartStream(ref ContainerRef) error {
 	// Create stream-specific context
 	streamCtx, streamCancel := context.WithCancel(m.ctx)
 
-	stream := NewStream(m.clientset, ref, m.output, m.parser, m.sinceTime)
+	stream := NewStream(m.clientset, ref, m.output, m.parser, m.sinceTime, m.idleTimeout)
 
 	m.mu.Lock()
 	// Double-check after acquiring semaphore

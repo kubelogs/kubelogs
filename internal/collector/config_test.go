@@ -23,6 +23,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.ShutdownTimeout != 30*time.Second {
 		t.Errorf("ShutdownTimeout = %v, want 30s", cfg.ShutdownTimeout)
 	}
+	if cfg.StreamIdleTimeout != 5*time.Minute {
+		t.Errorf("StreamIdleTimeout = %v, want 5m", cfg.StreamIdleTimeout)
+	}
 	if len(cfg.ExcludeNamespaces) != 1 || cfg.ExcludeNamespaces[0] != "kube-system" {
 		t.Errorf("ExcludeNamespaces = %v, want [kube-system]", cfg.ExcludeNamespaces)
 	}
@@ -43,6 +46,7 @@ func TestConfig_Validate(t *testing.T) {
 				BatchTimeout:         5 * time.Second,
 				StreamBufferSize:     1000,
 				ShutdownTimeout:      30 * time.Second,
+				StreamIdleTimeout:    5 * time.Minute,
 			},
 			wantErr: false,
 		},
@@ -54,6 +58,7 @@ func TestConfig_Validate(t *testing.T) {
 				BatchTimeout:         5 * time.Second,
 				StreamBufferSize:     1000,
 				ShutdownTimeout:      30 * time.Second,
+				StreamIdleTimeout:    5 * time.Minute,
 			},
 			wantErr: true,
 		},
@@ -66,6 +71,7 @@ func TestConfig_Validate(t *testing.T) {
 				BatchTimeout:         5 * time.Second,
 				StreamBufferSize:     1000,
 				ShutdownTimeout:      30 * time.Second,
+				StreamIdleTimeout:    5 * time.Minute,
 			},
 			wantErr: true,
 		},
@@ -78,6 +84,7 @@ func TestConfig_Validate(t *testing.T) {
 				BatchTimeout:         5 * time.Second,
 				StreamBufferSize:     1000,
 				ShutdownTimeout:      30 * time.Second,
+				StreamIdleTimeout:    5 * time.Minute,
 			},
 			wantErr: true,
 		},

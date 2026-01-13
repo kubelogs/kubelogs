@@ -46,6 +46,11 @@ type Config struct {
 	// ShutdownTimeout is max time to drain logs on shutdown.
 	// Default: 30s.
 	ShutdownTimeout time.Duration
+
+	// StreamIdleTimeout is max time a stream can be idle before reconnecting.
+	// Detects stale connections that stop producing logs.
+	// Default: 5m.
+	StreamIdleTimeout time.Duration
 }
 
 // DefaultConfig returns sensible defaults for <256MB RAM constraint.
@@ -58,6 +63,7 @@ func DefaultConfig() Config {
 		ExcludeNamespaces:    []string{"kube-system"},
 		ShutdownTimeout:      30 * time.Second,
 		SinceTime:            time.Now().Add(-(15 * time.Minute)),
+		StreamIdleTimeout:    5 * time.Minute,
 	}
 }
 
@@ -111,6 +117,12 @@ func ConfigFromEnv() Config {
 		}
 	}
 
+	if v := os.Getenv("KUBELOGS_STREAM_IDLE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			cfg.StreamIdleTimeout = d
+		}
+	}
+
 	return cfg
 }
 
@@ -133,6 +145,9 @@ func (c Config) Validate() error {
 	}
 	if c.ShutdownTimeout <= 0 {
 		return &ConfigError{Field: "ShutdownTimeout", Message: "must be positive"}
+	}
+	if c.StreamIdleTimeout <= 0 {
+		return &ConfigError{Field: "StreamIdleTimeout", Message: "must be positive"}
 	}
 	return nil
 }
