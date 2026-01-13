@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kubelogs/kubelogs/internal/storage"
@@ -206,6 +207,17 @@ func (s *HTTPServer) parseQueryParams(r *http.Request) storage.Query {
 	if v := params.Get("endTime"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			q.EndTime = t
+		}
+	}
+
+	// Attribute filters (attr.key=value format)
+	for key, values := range params {
+		if strings.HasPrefix(key, "attr.") && len(values) > 0 {
+			if q.Attributes == nil {
+				q.Attributes = make(map[string]string)
+			}
+			attrKey := strings.TrimPrefix(key, "attr.")
+			q.Attributes[attrKey] = values[0]
 		}
 	}
 

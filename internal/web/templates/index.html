@@ -141,6 +141,45 @@
                 </span>
             </div>
         </div>
+
+        <!-- Active Quick Filters (chips) -->
+        <div x-show="filters.pod || Object.keys(filters.attributes).length > 0"
+             class="flex items-center gap-2 mt-2 flex-wrap px-4">
+            <span class="text-gray-500 text-xs">Active filters:</span>
+
+            <!-- Pod chip -->
+            <span x-show="filters.pod"
+                  class="inline-flex items-center gap-1 bg-blue-900/50 text-blue-300 px-2 py-0.5 rounded text-xs font-mono">
+                <span class="text-blue-500">pod:</span>
+                <span x-text="filters.pod" class="max-w-32 truncate"></span>
+                <button @click="filters.pod = ''; applyFilters()"
+                        class="ml-1 hover:text-white" title="Remove filter">
+                    <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
+            </span>
+
+            <!-- Attribute chips -->
+            <template x-for="(val, key) in filters.attributes" :key="key">
+                <span class="inline-flex items-center gap-1 bg-purple-900/50 text-purple-300 px-2 py-0.5 rounded text-xs font-mono">
+                    <span class="text-purple-500" x-text="key + ':'"></span>
+                    <span x-text="val" class="max-w-24 truncate"></span>
+                    <button @click="removeAttrFilter(key)"
+                            class="ml-1 hover:text-white" title="Remove filter">
+                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>
+                        </svg>
+                    </button>
+                </span>
+            </template>
+
+            <!-- Clear all quick filters -->
+            <button @click="clearQuickFilters()"
+                    class="text-xs text-gray-500 hover:text-gray-300 ml-2">
+                Clear all
+            </button>
+        </div>
     </header>
 
     <!-- Log entries -->
@@ -227,37 +266,77 @@
 
             <!-- Kubernetes Context -->
             <div class="grid grid-cols-2 gap-4">
-                <div>
+                <div class="group">
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Namespace</dt>
-                    <dd class="text-blue-400 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
-                        @click="copyToClipboard(selectedEntry?.namespace)"
-                        title="Click to copy"
-                        x-text="selectedEntry?.namespace || '-'"></dd>
+                    <dd class="flex items-center gap-1">
+                        <span class="text-blue-400 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors flex-1 truncate"
+                              @click="copyToClipboard(selectedEntry?.namespace)"
+                              title="Click to copy"
+                              x-text="selectedEntry?.namespace || '-'"></span>
+                        <button x-show="selectedEntry?.namespace"
+                                @click.stop="addQuickFilter('namespace', null, selectedEntry?.namespace)"
+                                class="p-0.5 text-gray-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Filter by namespace">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                            </svg>
+                        </button>
+                    </dd>
                 </div>
-                <div>
+                <div class="group">
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Pod</dt>
-                    <dd class="text-blue-400 font-mono text-sm truncate cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
-                        @click="copyToClipboard(selectedEntry?.pod)"
-                        title="Click to copy"
-                        x-text="selectedEntry?.pod || '-'"></dd>
+                    <dd class="flex items-center gap-1">
+                        <span class="text-blue-400 font-mono text-sm truncate cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors flex-1"
+                              @click="copyToClipboard(selectedEntry?.pod)"
+                              title="Click to copy"
+                              x-text="selectedEntry?.pod || '-'"></span>
+                        <button x-show="selectedEntry?.pod"
+                                @click.stop="addQuickFilter('pod', null, selectedEntry?.pod)"
+                                class="p-0.5 text-gray-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Filter by pod">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                            </svg>
+                        </button>
+                    </dd>
                 </div>
             </div>
 
             <div class="grid grid-cols-2 gap-4">
-                <div>
+                <div class="group">
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Container</dt>
-                    <dd class="text-blue-400 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
-                        @click="copyToClipboard(selectedEntry?.container)"
-                        title="Click to copy"
-                        x-text="selectedEntry?.container || '-'"></dd>
+                    <dd class="flex items-center gap-1">
+                        <span class="text-blue-400 font-mono text-sm cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors flex-1 truncate"
+                              @click="copyToClipboard(selectedEntry?.container)"
+                              title="Click to copy"
+                              x-text="selectedEntry?.container || '-'"></span>
+                        <button x-show="selectedEntry?.container"
+                                @click.stop="addQuickFilter('container', null, selectedEntry?.container)"
+                                class="p-0.5 text-gray-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Filter by container">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                            </svg>
+                        </button>
+                    </dd>
                 </div>
-                <div>
+                <div class="group">
                     <dt class="text-xs text-gray-500 uppercase tracking-wide mb-1">Level</dt>
-                    <dd class="font-mono text-sm font-semibold cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
-                        :class="severityClass(selectedEntry?.severity)"
-                        @click="copyToClipboard(severityLabel(selectedEntry?.severity))"
-                        title="Click to copy"
-                        x-text="severityLabel(selectedEntry?.severity)"></dd>
+                    <dd class="flex items-center gap-1">
+                        <span class="font-mono text-sm font-semibold cursor-pointer hover:bg-gray-700 rounded px-1 -mx-1 transition-colors"
+                              :class="severityClass(selectedEntry?.severity)"
+                              @click="copyToClipboard(severityLabel(selectedEntry?.severity))"
+                              title="Click to copy"
+                              x-text="severityLabel(selectedEntry?.severity)"></span>
+                        <button x-show="selectedEntry?.severity !== undefined"
+                                @click.stop="addQuickFilter('severity', null, selectedEntry?.severity)"
+                                class="p-0.5 text-gray-500 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Filter by severity level">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                            </svg>
+                        </button>
+                    </dd>
                 </div>
             </div>
 
@@ -278,11 +357,19 @@
                 </dt>
                 <dd class="space-y-1">
                     <template x-for="(val, key) in selectedEntry?.attrs || {}" :key="key">
-                        <div class="flex bg-gray-900 rounded px-2 py-1.5 font-mono text-sm cursor-pointer hover:bg-gray-800 transition-colors"
-                             @click="copyToClipboard(val)"
-                             title="Click to copy value">
+                        <div class="group flex items-center bg-gray-900 rounded px-2 py-1.5 font-mono text-sm">
                             <span class="text-purple-400 mr-2 flex-shrink-0" x-text="key"></span>
-                            <span class="text-gray-300 break-all" x-text="val"></span>
+                            <span class="text-gray-300 break-all flex-1 cursor-pointer hover:bg-gray-800 rounded px-1 -mx-1 transition-colors"
+                                  @click="copyToClipboard(val)"
+                                  title="Click to copy value"
+                                  x-text="val"></span>
+                            <button @click.stop="addQuickFilter('attr', key, val)"
+                                    class="ml-2 p-0.5 text-gray-500 hover:text-purple-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                                    title="Filter by this attribute">
+                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                                </svg>
+                            </button>
                         </div>
                     </template>
                 </dd>

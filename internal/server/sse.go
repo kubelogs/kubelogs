@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kubelogs/kubelogs/internal/storage"
@@ -32,10 +33,12 @@ func (s *HTTPServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
 	var lastID int64
 	initialResult, err := s.store.Query(r.Context(), storage.Query{
 		Namespace:   filters.namespace,
+		Pod:         filters.pod,
 		Container:   filters.container,
 		MinSeverity: filters.minSeverity,
 		Search:      filters.search,
 		StartTime:   filters.startTime,
+		Attributes:  filters.attributes,
 		Pagination: storage.Pagination{
 			Limit: 50,
 			Order: storage.OrderDesc,
@@ -62,10 +65,12 @@ func (s *HTTPServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 			q := storage.Query{
 				Namespace:   filters.namespace,
+				Pod:         filters.pod,
 				Container:   filters.container,
 				MinSeverity: filters.minSeverity,
 				Search:      filters.search,
 				StartTime:   filters.startTime,
+				Attributes:  filters.attributes,
 				Pagination: storage.Pagination{
 					Limit:   100,
 					AfterID: lastID,
@@ -94,18 +99,23 @@ func (s *HTTPServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
 // sseFilters holds parsed SSE filter parameters.
 type sseFilters struct {
 	namespace   string
+	pod         string
 	container   string
 	minSeverity storage.Severity
 	search      string
 	startTime   time.Time
+	attributes  map[string]string
 }
 
 // parseSSEFilters extracts filter parameters from the request.
 func (s *HTTPServer) parseSSEFilters(r *http.Request) sseFilters {
 	params := r.URL.Query()
-	filters := sseFilters{}
+	filters := sseFilters{
+		attributes: make(map[string]string),
+	}
 
 	filters.namespace = params.Get("namespace")
+	filters.pod = params.Get("pod")
 	filters.container = params.Get("container")
 	filters.search = params.Get("search")
 
@@ -118,6 +128,14 @@ func (s *HTTPServer) parseSSEFilters(r *http.Request) sseFilters {
 	if v := params.Get("startTime"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			filters.startTime = t
+		}
+	}
+
+	// Parse attribute filters (attr.key=value format)
+	for key, values := range params {
+		if strings.HasPrefix(key, "attr.") && len(values) > 0 {
+			attrKey := strings.TrimPrefix(key, "attr.")
+			filters.attributes[attrKey] = values[0]
 		}
 	}
 

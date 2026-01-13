@@ -5,10 +5,12 @@ function app() {
         containers: [],
         filters: {
             namespace: '',
+            pod: '',
             container: '',
             minSeverity: 0,
             search: '',
-            timeSpan: 'live'
+            timeSpan: 'live',
+            attributes: {}
         },
         tailing: true,
         connected: false,
@@ -81,9 +83,13 @@ function app() {
 
             const params = new URLSearchParams();
             if (this.filters.namespace) params.set('namespace', this.filters.namespace);
+            if (this.filters.pod) params.set('pod', this.filters.pod);
             if (this.filters.container) params.set('container', this.filters.container);
             if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
             if (this.filters.search) params.set('search', this.filters.search);
+            for (const [k, v] of Object.entries(this.filters.attributes)) {
+                params.set(`attr.${k}`, v);
+            }
 
             const timeSpanMinutes = parseInt(this.filters.timeSpan);
             if (timeSpanMinutes > 0) {
@@ -128,9 +134,13 @@ function app() {
 
             const params = new URLSearchParams();
             if (this.filters.namespace) params.set('namespace', this.filters.namespace);
+            if (this.filters.pod) params.set('pod', this.filters.pod);
             if (this.filters.container) params.set('container', this.filters.container);
             if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
             if (this.filters.search) params.set('search', this.filters.search);
+            for (const [k, v] of Object.entries(this.filters.attributes)) {
+                params.set(`attr.${k}`, v);
+            }
             // Note: Live mode doesn't use time filter - streams all new entries
 
             this.eventSource = new EventSource(`/api/logs/stream?${params}`);
@@ -220,9 +230,13 @@ function app() {
             // Build query params matching current filters
             const params = new URLSearchParams();
             if (this.filters.namespace) params.set('namespace', this.filters.namespace);
+            if (this.filters.pod) params.set('pod', this.filters.pod);
             if (this.filters.container) params.set('container', this.filters.container);
             if (this.filters.minSeverity) params.set('minSeverity', this.filters.minSeverity);
             if (this.filters.search) params.set('search', this.filters.search);
+            for (const [k, v] of Object.entries(this.filters.attributes)) {
+                params.set(`attr.${k}`, v);
+            }
 
             // Apply time range filter for historical mode
             if (!this.isLiveMode()) {
@@ -360,7 +374,7 @@ function app() {
                     } else if (this.showShortcuts) {
                         this.showShortcuts = false;
                     } else {
-                        this.filters = { namespace: '', container: '', minSeverity: 0, search: '', timeSpan: 'live' };
+                        this.filters = { namespace: '', pod: '', container: '', minSeverity: 0, search: '', timeSpan: 'live', attributes: {} };
                         this.applyFilters();
                     }
                     break;
@@ -442,6 +456,37 @@ function app() {
             } catch (err) {
                 console.error('Failed to copy:', err);
             }
+        },
+
+        addQuickFilter(type, key, value) {
+            if (!value && value !== 0) return;
+            if (type === 'namespace') {
+                this.filters.namespace = value;
+            } else if (type === 'pod') {
+                this.filters.pod = value;
+            } else if (type === 'container') {
+                this.filters.container = value;
+            } else if (type === 'severity') {
+                this.filters.minSeverity = value;
+            } else if (type === 'attr') {
+                this.filters.attributes[key] = value;
+            }
+            this.applyFilters();
+        },
+
+        removeAttrFilter(key) {
+            delete this.filters.attributes[key];
+            this.applyFilters();
+        },
+
+        clearQuickFilters() {
+            this.filters.pod = '';
+            this.filters.attributes = {};
+            this.applyFilters();
+        },
+
+        hasQuickFilters() {
+            return this.filters.pod !== '' || Object.keys(this.filters.attributes).length > 0;
         }
     };
 }
