@@ -4,6 +4,7 @@
 GOCMD=go
 GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
+SQLITE_TAGS=-tags "fts5"
 BINARY_COLLECTOR=kubelogs-collector
 BINARY_SERVER=kubelogs-server
 
@@ -24,7 +25,7 @@ dev:
 
 ## dev-server: Run server locally with web UI
 dev-server:
-	$(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/server
+	$(GOBUILD) $(SQLITE_TAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/server
 	./bin/$(BINARY_SERVER)
 
 ## loadgen: Run load generator locally
@@ -34,12 +35,12 @@ loadgen:
 
 ## test: Run all tests
 test:
-	$(GOTEST) -v -race ./...
+	$(GOTEST) $(SQLITE_TAGS) -v -race ./...
 
 ## build: Build both binaries
 build:
 	CGO_ENABLED=0 $(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_COLLECTOR) ./cmd/collector
-	CGO_ENABLED=0 $(GOBUILD) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/server
+	CGO_ENABLED=1 $(GOBUILD) $(SQLITE_TAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_SERVER) ./cmd/server
 
 ## docker-build: Build Docker images locally (amd64 only for speed)
 docker-build:

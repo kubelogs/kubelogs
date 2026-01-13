@@ -12,7 +12,7 @@ import (
 
 	"github.com/kubelogs/kubelogs/internal/storage"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -57,17 +57,14 @@ func New(cfg Config) (*Store, error) {
 		os.Remove(cfg.Path + "-wal")
 	}
 
-	db, err := sql.Open("sqlite", cfg.Path)
+	db, err := sql.Open("sqlite3", cfg.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
 	// SQLite works best with a single connection for write serialization.
-	// Set a connection lifetime to force periodic recycling - this helps
-	// recover from corrupted connection state in modernc.org/sqlite.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
 
 	if _, err := db.Exec(pragmaSQL); err != nil {
 		db.Close()

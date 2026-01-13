@@ -14,13 +14,14 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_TIME=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -tags "fts5" \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /kubelogs-server \
     ./cmd/server
 
 # Runtime stage
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/base-debian12:nonroot
 
 COPY --from=builder /kubelogs-server /kubelogs-server
 
