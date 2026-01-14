@@ -48,22 +48,24 @@ type Stream struct {
 	sinceTime   time.Time
 	idleTimeout time.Duration
 
-	mu        sync.Mutex
-	running   bool
-	linesRead int64
-	errors    int
-	lastError error
-	startedAt time.Time
+	mu           sync.Mutex
+	running      bool
+	linesRead    int64
+	errors       int
+	lastError    error
+	startedAt    time.Time
+	lastSentTime time.Time // Cursor: timestamp of last successfully sent log
 }
 
 // StreamStats contains stream statistics.
 type StreamStats struct {
-	Container ContainerRef
-	Running   bool
-	LinesRead int64
-	Errors    int
-	LastError error
-	StartedAt time.Time
+	Container    ContainerRef
+	Running      bool
+	LinesRead    int64
+	Errors       int
+	LastError    error
+	StartedAt    time.Time
+	LastSentTime time.Time // Cursor position for debugging
 }
 
 // NewStream creates a stream for the given container.
@@ -103,6 +105,14 @@ func (s *Stream) Start(ctx context.Context) error {
 	maxBackoff := 30 * time.Second
 
 	for {
+		// Update sinceTime from cursor before each run attempt
+		s.mu.Lock()
+		if !s.lastSentTime.IsZero() {
+			// Add 1ns to exclude the last sent log (SinceTime is inclusive)
+			s.sinceTime = s.lastSentTime.Add(time.Nanosecond)
+		}
+		s.mu.Unlock()
+
 		err := s.run(ctx)
 		if err == nil {
 			return nil // Normal termination (pod finished)
@@ -201,6 +211,9 @@ func (s *Stream) run(ctx context.Context) error {
 			case s.output <- logLine:
 				s.mu.Lock()
 				s.linesRead++
+				if logLine.Timestamp.After(s.lastSentTime) {
+					s.lastSentTime = logLine.Timestamp
+				}
 				s.mu.Unlock()
 			case <-ctx.Done():
 				return ctx.Err()
@@ -234,12 +247,13 @@ func (s *Stream) Stats() StreamStats {
 	defer s.mu.Unlock()
 
 	return StreamStats{
-		Container: s.ref,
-		Running:   s.running,
-		LinesRead: s.linesRead,
-		Errors:    s.errors,
-		LastError: s.lastError,
-		StartedAt: s.startedAt,
+		Container:    s.ref,
+		Running:      s.running,
+		LinesRead:    s.linesRead,
+		Errors:       s.errors,
+		LastError:    s.lastError,
+		StartedAt:    s.startedAt,
+		LastSentTime: s.lastSentTime,
 	}
 }
 
