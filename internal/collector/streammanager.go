@@ -122,6 +122,11 @@ func (m *StreamManager) StartStream(ref ContainerRef) error {
 				"container", key,
 				"error", err,
 			)
+		} else if err == nil {
+			slog.Info("stream ended normally",
+				"container", key,
+				"linesRead", stream.Stats().LinesRead,
+			)
 		}
 	}()
 

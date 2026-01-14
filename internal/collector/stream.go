@@ -17,6 +17,9 @@ import (
 	"github.com/kubelogs/kubelogs/internal/storage"
 )
 
+// errStreamClosedUnexpectedly indicates the stream closed but the container is still running.
+var errStreamClosedUnexpectedly = errors.New("stream closed unexpectedly, container still running")
+
 // ContainerRef uniquely identifies a container.
 type ContainerRef struct {
 	Namespace     string
@@ -194,7 +197,15 @@ func (s *Stream) run(ctx context.Context) error {
 				if err := scanner.Err(); err != nil {
 					return fmt.Errorf("read log stream: %w", err)
 				}
-				return nil // Stream ended normally (pod terminated)
+				// Connection closed cleanly - check if container is still running
+				// This distinguishes "pod terminated" from "connection dropped"
+				if s.isContainerRunning(ctx) {
+					slog.Debug("stream closed but container still running, will reconnect",
+						"container", s.ref.Key(),
+					)
+					return errStreamClosedUnexpectedly
+				}
+				return nil // Pod actually terminated
 			}
 
 			// Parse and send the log line
@@ -222,6 +233,12 @@ func (s *Stream) run(ctx context.Context) error {
 				slog.Warn("output channel full, dropping log line",
 					"container", s.ref.Key(),
 				)
+				// Still update cursor to avoid re-sending dropped logs on reconnect
+				s.mu.Lock()
+				if logLine.Timestamp.After(s.lastSentTime) {
+					s.lastSentTime = logLine.Timestamp
+				}
+				s.mu.Unlock()
 			}
 
 			// Start next scan
@@ -255,6 +272,28 @@ func (s *Stream) Stats() StreamStats {
 		StartedAt:    s.startedAt,
 		LastSentTime: s.lastSentTime,
 	}
+}
+
+// isContainerRunning checks if the container is still running in the cluster.
+// Used to distinguish between "pod terminated" and "connection dropped".
+func (s *Stream) isContainerRunning(ctx context.Context) bool {
+	pod, err := s.clientset.CoreV1().Pods(s.ref.Namespace).Get(ctx, s.ref.PodName, metav1.GetOptions{})
+	if err != nil {
+		// Can't reach API server or pod doesn't exist - assume not running
+		return false
+	}
+
+	// Verify the pod UID matches to handle pod name reuse
+	if string(pod.UID) != s.ref.PodUID {
+		return false
+	}
+
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == s.ref.ContainerName && cs.State.Running != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // isRetryable returns true if the error is worth retrying.
