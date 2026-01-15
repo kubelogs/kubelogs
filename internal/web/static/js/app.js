@@ -10,6 +10,8 @@ function app() {
             minSeverity: 0,
             search: '',
             timeSpan: 'live',
+            startTime: '',  // Custom range start (datetime-local format)
+            endTime: '',    // Custom range end (datetime-local format)
             attributes: {}
         },
         tailing: true,
@@ -46,6 +48,23 @@ function app() {
 
         isLiveMode() {
             return this.filters.timeSpan === 'live';
+        },
+
+        onTimeSpanChange() {
+            // When switching to custom mode, set sensible defaults (last 1 hour)
+            if (this.filters.timeSpan === 'custom' && !this.filters.startTime) {
+                const now = new Date();
+                const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+                // Format as datetime-local: YYYY-MM-DDTHH:mm
+                this.filters.startTime = this.formatDateTimeLocal(oneHourAgo);
+                this.filters.endTime = this.formatDateTimeLocal(now);
+            }
+            this.applyFilters();
+        },
+
+        formatDateTimeLocal(date) {
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
         },
 
         async loadFilters() {
@@ -91,10 +110,20 @@ function app() {
                 params.set(`attr.${k}`, v);
             }
 
-            const timeSpanMinutes = parseInt(this.filters.timeSpan);
-            if (timeSpanMinutes > 0) {
-                const startTime = new Date(Date.now() - timeSpanMinutes * 60 * 1000);
-                params.set('startTime', startTime.toISOString());
+            // Handle time range (custom or relative)
+            if (this.filters.timeSpan === 'custom') {
+                if (this.filters.startTime) {
+                    params.set('startTime', new Date(this.filters.startTime).toISOString());
+                }
+                if (this.filters.endTime) {
+                    params.set('endTime', new Date(this.filters.endTime).toISOString());
+                }
+            } else {
+                const timeSpanMinutes = parseInt(this.filters.timeSpan);
+                if (timeSpanMinutes > 0) {
+                    const startTime = new Date(Date.now() - timeSpanMinutes * 60 * 1000);
+                    params.set('startTime', startTime.toISOString());
+                }
             }
 
             params.set('order', 'desc');
@@ -240,10 +269,19 @@ function app() {
 
             // Apply time range filter for historical mode
             if (!this.isLiveMode()) {
-                const timeSpanMinutes = parseInt(this.filters.timeSpan);
-                if (timeSpanMinutes > 0) {
-                    const startTime = new Date(Date.now() - timeSpanMinutes * 60 * 1000);
-                    params.set('startTime', startTime.toISOString());
+                if (this.filters.timeSpan === 'custom') {
+                    if (this.filters.startTime) {
+                        params.set('startTime', new Date(this.filters.startTime).toISOString());
+                    }
+                    if (this.filters.endTime) {
+                        params.set('endTime', new Date(this.filters.endTime).toISOString());
+                    }
+                } else {
+                    const timeSpanMinutes = parseInt(this.filters.timeSpan);
+                    if (timeSpanMinutes > 0) {
+                        const startTime = new Date(Date.now() - timeSpanMinutes * 60 * 1000);
+                        params.set('startTime', startTime.toISOString());
+                    }
                 }
             }
 
@@ -379,7 +417,7 @@ function app() {
                     } else if (this.showShortcuts) {
                         this.showShortcuts = false;
                     } else {
-                        this.filters = { namespace: '', pod: '', container: '', minSeverity: 0, search: '', timeSpan: 'live', attributes: {} };
+                        this.filters = { namespace: '', pod: '', container: '', minSeverity: 0, search: '', timeSpan: 'live', startTime: '', endTime: '', attributes: {} };
                         this.applyFilters();
                     }
                     break;

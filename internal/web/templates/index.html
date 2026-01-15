@@ -105,7 +105,7 @@
             <div class="flex items-center gap-2">
                 <label class="text-gray-400 text-sm">Time:</label>
                 <select x-model="filters.timeSpan"
-                        @change="applyFilters()"
+                        @change="onTimeSpanChange()"
                         class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <option value="live">Live</option>
                     <option value="0">All time</option>
@@ -114,8 +114,26 @@
                     <option value="60">Last 1 hour</option>
                     <option value="360">Last 6 hours</option>
                     <option value="1440">Last 24 hours</option>
+                    <option value="custom">Custom range</option>
                 </select>
             </div>
+
+            <!-- Custom time range inputs -->
+            <template x-if="filters.timeSpan === 'custom'">
+                <div class="flex items-center gap-2">
+                    <input type="datetime-local"
+                           x-model="filters.startTime"
+                           @change="applyFilters()"
+                           class="bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           title="Start time">
+                    <span class="text-gray-400 text-sm">to</span>
+                    <input type="datetime-local"
+                           x-model="filters.endTime"
+                           @change="applyFilters()"
+                           class="bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           title="End time">
+                </div>
+            </template>
 
             <!-- Tail toggle - only visible in Live mode -->
             <button x-show="filters.timeSpan === 'live'"
