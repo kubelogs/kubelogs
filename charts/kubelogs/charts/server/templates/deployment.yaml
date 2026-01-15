@@ -42,11 +42,25 @@ spec:
             - name: grpc
               containerPort: 50051
               protocol: TCP
+            {{- if .Values.service.http.enabled }}
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            {{- end }}
           env:
             - name: KUBELOGS_LISTEN_ADDR
               value: {{ .Values.env.listenAddr | quote }}
             - name: KUBELOGS_DB_PATH
               value: {{ .Values.env.dbPath | quote }}
+            {{- if .Values.service.http.enabled }}
+            - name: KUBELOGS_HTTP_ENABLED
+              value: "true"
+            - name: KUBELOGS_HTTP_ADDR
+              value: {{ .Values.env.httpAddr | quote }}
+            {{- else }}
+            - name: KUBELOGS_HTTP_ENABLED
+              value: "false"
+            {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
             grpc:
