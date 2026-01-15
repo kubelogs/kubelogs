@@ -90,6 +90,12 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 
+	// Run migrations for existing databases
+	if err := runMigrations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+
 	return &Store{
 		db:     db,
 		path:   cfg.Path,
@@ -161,8 +167,8 @@ func (s *Store) Flush(ctx context.Context) error {
 	defer tx.Rollback()
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO logs (timestamp, namespace, pod, container, severity, message, attributes)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT OR IGNORE INTO logs (timestamp, namespace, pod, container, severity, message, attributes, dedup_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		s.mu.Lock()
@@ -180,6 +186,14 @@ func (s *Store) Flush(ctx context.Context) error {
 			attrs = &str
 		}
 
+		hash := computeDedupHash(
+			e.Timestamp.UnixNano(),
+			e.Namespace,
+			e.Pod,
+			e.Container,
+			e.Message,
+		)
+
 		_, err := stmt.ExecContext(ctx,
 			e.Timestamp.UnixNano(),
 			e.Namespace,
@@ -188,6 +202,7 @@ func (s *Store) Flush(ctx context.Context) error {
 			e.Severity,
 			e.Message,
 			attrs,
+			hash,
 		)
 		if err != nil {
 			s.mu.Lock()
@@ -395,8 +410,8 @@ func (s *Store) Close() error {
 		tx, err := s.db.Begin()
 		if err == nil {
 			stmt, _ := tx.Prepare(`
-				INSERT INTO logs (timestamp, namespace, pod, container, severity, message, attributes)
-				VALUES (?, ?, ?, ?, ?, ?, ?)
+				INSERT OR IGNORE INTO logs (timestamp, namespace, pod, container, severity, message, attributes, dedup_hash)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 			`)
 			if stmt != nil {
 				for _, e := range batch {
@@ -406,7 +421,14 @@ func (s *Store) Close() error {
 						str := string(b)
 						attrs = &str
 					}
-					stmt.Exec(e.Timestamp.UnixNano(), e.Namespace, e.Pod, e.Container, e.Severity, e.Message, attrs)
+					hash := computeDedupHash(
+						e.Timestamp.UnixNano(),
+						e.Namespace,
+						e.Pod,
+						e.Container,
+						e.Message,
+					)
+					stmt.Exec(e.Timestamp.UnixNano(), e.Namespace, e.Pod, e.Container, e.Severity, e.Message, attrs, hash)
 				}
 				stmt.Close()
 			}
@@ -555,4 +577,125 @@ func (s *Store) ListContainers(ctx context.Context) ([]string, error) {
 	}
 
 	return containers, rows.Err()
+}
+
+// runMigrations handles schema updates for existing databases.
+func runMigrations(db *sql.DB) error {
+	// Check if dedup_hash column exists
+	hasColumn, err := columnExists(db, "logs", "dedup_hash")
+	if err != nil {
+		return fmt.Errorf("check column: %w", err)
+	}
+
+	if !hasColumn {
+		// Add the column
+		if _, err := db.Exec(`ALTER TABLE logs ADD COLUMN dedup_hash INTEGER`); err != nil {
+			return fmt.Errorf("add dedup_hash column: %w", err)
+		}
+
+		// Backfill existing rows in batches
+		if err := backfillDedupHashes(db); err != nil {
+			return fmt.Errorf("backfill hashes: %w", err)
+		}
+
+		// Create the unique index after backfill
+		if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL`); err != nil {
+			return fmt.Errorf("create dedup index: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// columnExists checks if a column exists in the given table.
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// backfillDedupHashes computes and sets dedup_hash for existing rows.
+func backfillDedupHashes(db *sql.DB) error {
+	const batchSize = 10000
+
+	for {
+		// Fetch batch of rows without hashes
+		rows, err := db.Query(`
+			SELECT id, timestamp, namespace, pod, container, message
+			FROM logs
+			WHERE dedup_hash IS NULL
+			LIMIT ?
+		`, batchSize)
+		if err != nil {
+			return err
+		}
+
+		type row struct {
+			id        int64
+			timestamp int64
+			namespace string
+			pod       string
+			container string
+			message   string
+		}
+		var batch []row
+
+		for rows.Next() {
+			var r row
+			if err := rows.Scan(&r.id, &r.timestamp, &r.namespace, &r.pod, &r.container, &r.message); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, r)
+		}
+		rows.Close()
+
+		if len(batch) == 0 {
+			break // All rows processed
+		}
+
+		// Update batch with computed hashes
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+
+		stmt, err := tx.Prepare(`UPDATE logs SET dedup_hash = ? WHERE id = ?`)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		for _, r := range batch {
+			hash := computeDedupHash(r.timestamp, r.namespace, r.pod, r.container, r.message)
+			if _, err := stmt.Exec(hash, r.id); err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return err
+			}
+		}
+
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

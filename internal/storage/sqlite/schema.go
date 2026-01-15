@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS logs (
     container   TEXT NOT NULL,
     severity    INTEGER NOT NULL,
     message     TEXT NOT NULL,
-    attributes  TEXT
+    attributes  TEXT,
+    dedup_hash  INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_k8s
@@ -21,6 +22,9 @@ CREATE INDEX IF NOT EXISTS idx_logs_timestamp
 
 CREATE INDEX IF NOT EXISTS idx_logs_severity
     ON logs(severity);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup
+    ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
     message,

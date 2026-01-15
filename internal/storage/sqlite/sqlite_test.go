@@ -277,3 +277,98 @@ func TestConcurrentWritesAndReads(t *testing.T) {
 		t.Errorf("Concurrent operation error: %v", err)
 	}
 }
+
+func TestDeduplication(t *testing.T) {
+	store, err := New(Config{Path: ":memory:"})
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	entry := storage.LogEntry{
+		Timestamp: now,
+		Namespace: "default",
+		Pod:       "test-pod",
+		Container: "app",
+		Severity:  storage.SeverityInfo,
+		Message:   "duplicate message",
+	}
+
+	// Write same entry twice
+	store.Write(context.Background(), storage.LogBatch{entry})
+	store.Write(context.Background(), storage.LogBatch{entry})
+	store.Flush(context.Background())
+
+	// Should only have one entry due to deduplication
+	stats, err := store.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != 1 {
+		t.Errorf("Expected 1 entry after dedup, got %d", stats.TotalEntries)
+	}
+}
+
+func TestDeduplicationDifferentEntries(t *testing.T) {
+	store, err := New(Config{Path: ":memory:"})
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+
+	// These should all be stored as separate entries
+	entries := storage.LogBatch{
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},
+		{Timestamp: now.Add(time.Nanosecond), Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"}, // different timestamp
+		{Timestamp: now, Namespace: "ns2", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                    // different namespace
+		{Timestamp: now, Namespace: "ns", Pod: "pod2", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                    // different pod
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c2", Severity: storage.SeverityInfo, Message: "msg1"},                    // different container
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg2"},                     // different message
+	}
+
+	store.Write(context.Background(), entries)
+	store.Flush(context.Background())
+
+	stats, err := store.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != 6 {
+		t.Errorf("Expected 6 distinct entries, got %d", stats.TotalEntries)
+	}
+}
+
+func TestDedupHashCollisionResistance(t *testing.T) {
+	// Test that similar but different entries get different hashes
+	testCases := []struct {
+		ts        int64
+		namespace string
+		pod       string
+		container string
+		message   string
+	}{
+		{1000, "ns", "pod", "container", "msg"},
+		{1001, "ns", "pod", "container", "msg"},  // Different timestamp
+		{1000, "ns2", "pod", "container", "msg"}, // Different namespace
+		{1000, "ns", "pod2", "container", "msg"}, // Different pod
+		{1000, "ns", "pod", "container2", "msg"}, // Different container
+		{1000, "ns", "pod", "container", "msg2"}, // Different message
+		// Test separator collision prevention
+		{1000, "ab", "c", "d", "msg"},  // namespace="ab", pod="c"
+		{1000, "a", "bc", "d", "msg"},  // namespace="a", pod="bc" - should be different hash
+		{1000, "a", "b", "cd", "msg"},  // container="cd"
+		{1000, "a", "b", "c", "dmsg"},  // message="dmsg"
+	}
+
+	hashes := make(map[int64]int)
+	for i, tc := range testCases {
+		h := computeDedupHash(tc.ts, tc.namespace, tc.pod, tc.container, tc.message)
+		if prev, exists := hashes[h]; exists {
+			t.Errorf("Hash collision: case %d has same hash as case %d", i, prev)
+		}
+		hashes[h] = i
+	}
+}
