@@ -417,6 +417,12 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying database connection.
+// This is used by the auth package to share the same connection.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 // buildQuery constructs a parameterized SQL query from Query.
 func buildQuery(q storage.Query) (string, []any) {
 	var sql strings.Builder

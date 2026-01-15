@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"html/template"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kubelogs/kubelogs/internal/auth"
 	"github.com/kubelogs/kubelogs/internal/storage"
 	"github.com/kubelogs/kubelogs/internal/web"
 )
@@ -20,10 +22,17 @@ type HTTPServer struct {
 	store     storage.Store
 	templates *template.Template
 	staticFS  fs.FS
+
+	// Auth components (nil when auth disabled)
+	authMiddleware  *auth.Middleware
+	userStore       *auth.UserStore
+	sessionStore    *auth.SessionStore
+	authEnabled     bool
+	sessionDuration time.Duration
 }
 
 // NewHTTPServer creates a new HTTP server for the web UI.
-func NewHTTPServer(store storage.Store) (*HTTPServer, error) {
+func NewHTTPServer(store storage.Store, db *sql.DB, cfg Config) (*HTTPServer, error) {
 	tmpl, err := web.Templates()
 	if err != nil {
 		return nil, err
@@ -34,29 +43,61 @@ func NewHTTPServer(store storage.Store) (*HTTPServer, error) {
 		return nil, err
 	}
 
-	return &HTTPServer{
-		store:     store,
-		templates: tmpl,
-		staticFS:  staticFS,
-	}, nil
+	s := &HTTPServer{
+		store:           store,
+		templates:       tmpl,
+		staticFS:        staticFS,
+		authEnabled:     cfg.AuthEnabled,
+		sessionDuration: cfg.SessionDuration,
+	}
+
+	if cfg.AuthEnabled {
+		s.userStore = auth.NewUserStore(db)
+		s.sessionStore = auth.NewSessionStore(db, cfg.SessionDuration)
+		s.authMiddleware = auth.NewMiddleware(
+			s.userStore,
+			s.sessionStore,
+			cfg.SessionCookieName,
+			cfg.SessionCookieSecure,
+		)
+	}
+
+	return s, nil
 }
 
 // Routes returns the HTTP handler with all routes configured.
 func (s *HTTPServer) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Static files
+	// Static files - always public
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.staticFS))))
 
-	// Pages
-	mux.HandleFunc("GET /", s.handleIndex)
+	if s.authEnabled {
+		// Public routes (no auth required)
+		mux.HandleFunc("GET /login", s.handleLoginPage)
+		mux.HandleFunc("POST /login", s.handleLogin)
+		mux.HandleFunc("GET /setup", s.handleSetupPage)
+		mux.HandleFunc("POST /setup", s.handleSetup)
+		mux.HandleFunc("POST /logout", s.handleLogout)
 
-	// API endpoints
-	mux.HandleFunc("GET /api/logs", s.handleQueryLogs)
-	mux.HandleFunc("GET /api/logs/stream", s.handleLogStream)
-	mux.HandleFunc("GET /api/stats", s.handleStats)
-	mux.HandleFunc("GET /api/filters/namespaces", s.handleListNamespaces)
-	mux.HandleFunc("GET /api/filters/containers", s.handleListContainers)
+		// Protected page routes
+		mux.Handle("GET /", s.authMiddleware.RequireAuth(http.HandlerFunc(s.handleIndex)))
+
+		// Protected API routes
+		mux.Handle("GET /api/logs", s.authMiddleware.RequireAuthAPI(http.HandlerFunc(s.handleQueryLogs)))
+		mux.Handle("GET /api/logs/stream", s.authMiddleware.RequireAuthAPI(http.HandlerFunc(s.handleLogStream)))
+		mux.Handle("GET /api/stats", s.authMiddleware.RequireAuthAPI(http.HandlerFunc(s.handleStats)))
+		mux.Handle("GET /api/filters/namespaces", s.authMiddleware.RequireAuthAPI(http.HandlerFunc(s.handleListNamespaces)))
+		mux.Handle("GET /api/filters/containers", s.authMiddleware.RequireAuthAPI(http.HandlerFunc(s.handleListContainers)))
+	} else {
+		// No auth - all routes public (current behavior)
+		mux.HandleFunc("GET /", s.handleIndex)
+		mux.HandleFunc("GET /api/logs", s.handleQueryLogs)
+		mux.HandleFunc("GET /api/logs/stream", s.handleLogStream)
+		mux.HandleFunc("GET /api/stats", s.handleStats)
+		mux.HandleFunc("GET /api/filters/namespaces", s.handleListNamespaces)
+		mux.HandleFunc("GET /api/filters/containers", s.handleListContainers)
+	}
 
 	return s.withLogging(mux)
 }
@@ -81,11 +122,143 @@ func (s *HTTPServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	data := map[string]any{
+		"AuthEnabled": s.authEnabled,
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, "index.html", nil); err != nil {
+	if err := s.templates.ExecuteTemplate(w, "index.html", data); err != nil {
 		slog.Error("template error", "error", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
+}
+
+// handleLoginPage renders the login form.
+func (s *HTTPServer) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	// Check if user already authenticated
+	if cookie, err := r.Cookie(s.authMiddleware.CookieName()); err == nil {
+		if _, err := s.sessionStore.Get(r.Context(), cookie.Value); err == nil {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
+	}
+
+	// Check if setup needed
+	hasUsers, _ := s.userStore.HasUsers(r.Context())
+	if !hasUsers {
+		http.Redirect(w, r, "/setup", http.StatusSeeOther)
+		return
+	}
+
+	data := map[string]any{
+		"Error": r.URL.Query().Get("error"),
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "login.html", data); err != nil {
+		slog.Error("template error", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// handleLogin processes login form submission.
+func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	user, err := s.userStore.Authenticate(r.Context(), username, password)
+	if err != nil {
+		http.Redirect(w, r, "/login?error=invalid", http.StatusSeeOther)
+		return
+	}
+
+	session, err := s.sessionStore.Create(r.Context(), user.ID)
+	if err != nil {
+		slog.Error("session create error", "error", err)
+		http.Redirect(w, r, "/login?error=server", http.StatusSeeOther)
+		return
+	}
+
+	maxAge := int(s.sessionDuration.Seconds())
+	s.authMiddleware.SetSessionCookie(w, session.ID, maxAge)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleSetupPage renders the initial setup form.
+func (s *HTTPServer) handleSetupPage(w http.ResponseWriter, r *http.Request) {
+	hasUsers, _ := s.userStore.HasUsers(r.Context())
+	if hasUsers {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	data := map[string]any{
+		"Error": r.URL.Query().Get("error"),
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.templates.ExecuteTemplate(w, "setup.html", data); err != nil {
+		slog.Error("template error", "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
+}
+
+// handleSetup processes first user creation.
+func (s *HTTPServer) handleSetup(w http.ResponseWriter, r *http.Request) {
+	// Verify no users exist yet
+	hasUsers, _ := s.userStore.HasUsers(r.Context())
+	if hasUsers {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	// Validation
+	if len(username) < 3 {
+		http.Redirect(w, r, "/setup?error=username_short", http.StatusSeeOther)
+		return
+	}
+	if len(password) < 8 {
+		http.Redirect(w, r, "/setup?error=password_short", http.StatusSeeOther)
+		return
+	}
+	if password != confirmPassword {
+		http.Redirect(w, r, "/setup?error=password_mismatch", http.StatusSeeOther)
+		return
+	}
+
+	user, err := s.userStore.CreateUser(r.Context(), username, password)
+	if err != nil {
+		slog.Error("user create error", "error", err)
+		http.Redirect(w, r, "/setup?error=server", http.StatusSeeOther)
+		return
+	}
+
+	// Auto-login after setup
+	session, err := s.sessionStore.Create(r.Context(), user.ID)
+	if err != nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	maxAge := int(s.sessionDuration.Seconds())
+	s.authMiddleware.SetSessionCookie(w, session.ID, maxAge)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// handleLogout clears the session.
+func (s *HTTPServer) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie(s.authMiddleware.CookieName()); err == nil {
+		s.sessionStore.Delete(r.Context(), cookie.Value)
+	}
+	s.authMiddleware.SetSessionCookie(w, "", -1)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// SessionStore returns the session store for cleanup.
+func (s *HTTPServer) SessionStore() *auth.SessionStore {
+	return s.sessionStore
 }
 
 // logEntryJSON is the JSON representation of a log entry for the API.

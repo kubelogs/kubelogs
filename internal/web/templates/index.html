@@ -158,6 +158,15 @@
                     Press <kbd class="bg-gray-700 px-1.5 py-0.5 rounded text-xs font-mono">?</kbd> for shortcuts
                 </span>
             </div>
+
+            {{if .AuthEnabled}}
+            <form method="POST" action="/logout" class="ml-2">
+                <button type="submit"
+                        class="px-3 py-1.5 rounded text-sm bg-gray-700 hover:bg-gray-600 transition-colors">
+                    Logout
+                </button>
+            </form>
+            {{end}}
         </div>
 
         <!-- Active Quick Filters (chips) -->

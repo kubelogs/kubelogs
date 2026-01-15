@@ -32,17 +32,37 @@ type Config struct {
 	// RetentionInterval is how often the retention cleanup runs.
 	// Default: 1 hour
 	RetentionInterval time.Duration
+
+	// AuthEnabled enables authentication when true.
+	// Default: false (disabled)
+	AuthEnabled bool
+
+	// SessionDuration is how long sessions remain valid.
+	// Default: 24 hours
+	SessionDuration time.Duration
+
+	// SessionCookieName is the name of the session cookie.
+	// Default: "kubelogs_session"
+	SessionCookieName string
+
+	// SessionCookieSecure sets the Secure flag on session cookies.
+	// Default: true
+	SessionCookieSecure bool
 }
 
 // DefaultConfig returns sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		ListenAddr:        ":50051",
-		HTTPListenAddr:    ":8080",
-		HTTPEnabled:       true,
-		DBPath:            "kubelogs.db",
-		RetentionDays:     0,
-		RetentionInterval: time.Hour,
+		ListenAddr:          ":50051",
+		HTTPListenAddr:      ":8080",
+		HTTPEnabled:         true,
+		DBPath:              "kubelogs.db",
+		RetentionDays:       0,
+		RetentionInterval:   time.Hour,
+		AuthEnabled:         false,
+		SessionDuration:     24 * time.Hour,
+		SessionCookieName:   "kubelogs_session",
+		SessionCookieSecure: true,
 	}
 }
 
@@ -70,6 +90,20 @@ func ConfigFromEnv() Config {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			cfg.RetentionDays = n
 		}
+	}
+
+	if v := os.Getenv("KUBELOGS_AUTH_ENABLED"); v == "true" {
+		cfg.AuthEnabled = true
+	}
+
+	if v := os.Getenv("KUBELOGS_SESSION_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.SessionDuration = d
+		}
+	}
+
+	if v := os.Getenv("KUBELOGS_SESSION_SECURE"); v == "false" {
+		cfg.SessionCookieSecure = false
 	}
 
 	return cfg

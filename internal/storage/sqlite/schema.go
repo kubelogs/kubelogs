@@ -43,6 +43,24 @@ CREATE TRIGGER IF NOT EXISTS logs_au AFTER UPDATE ON logs BEGIN
         VALUES('delete', old.id, old.message);
     INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
 END;
+
+-- Authentication tables
+CREATE TABLE IF NOT EXISTS users (
+    id         INTEGER PRIMARY KEY,
+    username   TEXT NOT NULL UNIQUE,
+    password   TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 `
 
 // pragmaSQL contains performance-critical SQLite settings.

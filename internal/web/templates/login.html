@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - kubelogs</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex items-center justify-center">
+    <div class="bg-gray-800 border border-gray-700 rounded-lg p-8 w-full max-w-md">
+        <h1 class="text-2xl font-semibold text-center mb-6">kubelogs</h1>
+
+        {{if eq .Error "invalid"}}
+        <div class="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded mb-4">
+            Invalid username or password
+        </div>
+        {{end}}
+        {{if eq .Error "server"}}
+        <div class="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded mb-4">
+            Server error. Please try again.
+        </div>
+        {{end}}
+
+        <form method="POST" action="/login" class="space-y-4">
+            <div>
+                <label for="username" class="block text-sm font-medium text-gray-400 mb-1">Username</label>
+                <input type="text" id="username" name="username" required autofocus
+                       class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-400 mb-1">Password</label>
+                <input type="password" id="password" name="password" required
+                       class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <button type="submit"
+                    class="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-medium transition-colors">
+                Sign In
+            </button>
+        </form>
+    </div>
+</body>
+</html>

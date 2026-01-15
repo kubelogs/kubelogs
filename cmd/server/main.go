@@ -73,10 +73,31 @@ func main() {
 
 	// Start HTTP server for web UI
 	if cfg.HTTPEnabled {
-		httpServer, err := server.NewHTTPServer(store)
+		httpServer, err := server.NewHTTPServer(store, store.DB(), cfg)
 		if err != nil {
 			slog.Error("failed to create HTTP server", "error", err)
 			os.Exit(1)
+		}
+
+		// Start session cleanup goroutine if auth is enabled
+		if cfg.AuthEnabled && httpServer.SessionStore() != nil {
+			go func() {
+				ticker := time.NewTicker(15 * time.Minute)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						deleted, err := httpServer.SessionStore().DeleteExpired(ctx)
+						if err != nil {
+							slog.Error("session cleanup error", "error", err)
+						} else if deleted > 0 {
+							slog.Debug("cleaned up expired sessions", "count", deleted)
+						}
+					}
+				}
+			}()
 		}
 
 		go func() {
@@ -98,6 +119,7 @@ func main() {
 		"grpc_address", cfg.ListenAddr,
 		"http_address", cfg.HTTPListenAddr,
 		"http_enabled", cfg.HTTPEnabled,
+		"auth_enabled", cfg.AuthEnabled,
 		"retention_days", cfg.RetentionDays,
 	)
 
