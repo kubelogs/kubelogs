@@ -314,6 +314,11 @@ function app() {
                 return;
             }
 
+            // Don't interfere with browser shortcuts (Cmd+c, Ctrl+v, etc.)
+            if (e.ctrlKey || e.metaKey || e.altKey) {
+                return;
+            }
+
             switch (e.key) {
                 case '/':
                     e.preventDefault();
