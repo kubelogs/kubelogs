@@ -5,7 +5,7 @@ global:
   # Image repository owner
   imageOwner: kubelogs
   # Image pull policy
-  imagePullPolicy: IfNotPresent
+  imagePullPolicy: Always
   # Image pull secrets
   imagePullSecrets: []
 
@@ -15,8 +15,8 @@ server:
   replicaCount: 1
 
   image:
-    repository: ""
-    tag: ""
+    repository: "ghcr.io/kubelogs/kubelogs-server"
+    tag: "latest"
 
   service:
     type: ClusterIP
@@ -26,24 +26,24 @@ server:
       port: 8080
 
   ingress:
-    enabled: false
-    className: ""
+    enabled: true
+    className: "traefik"
     annotations: {}
     hosts:
-      - host: kubelogs.local
+      - host: kubelogs.marcorico.tech
         paths:
           - path: /
             pathType: Prefix
     tls:
-      enabled: false
-      certResolver: ""
+      enabled: true
+      certResolver: "letsencrypt"
 
   persistence:
     enabled: true
     storageClass: ""
     accessModes:
       - ReadWriteOnce
-    size: 10Gi
+    size: 4Gi
     existingClaim: ""
 
   env:
@@ -51,6 +51,12 @@ server:
     dbPath: "/data/kubelogs.db"
     httpEnabled: true
     httpAddr: ":8080"
+    # Authentication settings
+    authEnabled: true
+    sessionDuration: "24h"
+    sessionSecure: true
+    # Retention settings (0 = disabled)
+    retentionDays: 7
 
   resources:
     requests:
@@ -97,8 +103,8 @@ collector:
   standaloneMode: false
 
   image:
-    repository: ""
-    tag: ""
+    repository: "ghcr.io/kubelogs/kubelogs-collector"
+    tag: "latest"
 
   storage:
     # Remote server address (auto-configured if empty and server.enabled)

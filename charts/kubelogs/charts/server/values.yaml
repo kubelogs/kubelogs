@@ -39,6 +39,12 @@ env:
   dbPath: "/data/kubelogs.db"
   httpEnabled: true
   httpAddr: ":8080"
+  # Authentication settings
+  authEnabled: false
+  sessionDuration: "24h"
+  sessionSecure: true
+  # Retention settings (0 = disabled)
+  retentionDays: 0
 
 resources:
   requests:

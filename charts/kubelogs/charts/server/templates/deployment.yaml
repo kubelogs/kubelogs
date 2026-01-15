@@ -61,6 +61,18 @@ spec:
             - name: KUBELOGS_HTTP_ENABLED
               value: "false"
             {{- end }}
+            {{- if .Values.env.authEnabled }}
+            - name: KUBELOGS_AUTH_ENABLED
+              value: "true"
+            - name: KUBELOGS_SESSION_DURATION
+              value: {{ .Values.env.sessionDuration | quote }}
+            - name: KUBELOGS_SESSION_SECURE
+              value: {{ .Values.env.sessionSecure | quote }}
+            {{- end }}
+            {{- if gt (int .Values.env.retentionDays) 0 }}
+            - name: KUBELOGS_RETENTION_DAYS
+              value: {{ .Values.env.retentionDays | quote }}
+            {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
             grpc:
