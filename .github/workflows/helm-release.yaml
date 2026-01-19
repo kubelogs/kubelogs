@@ -1,0 +1,32 @@
+name: Release Helm Chart
+
+on:
+  push:
+    tags:
+      - 'helm-v*'
+
+env:
+  REGISTRY: ghcr.io
+  CHART_PATH: charts/kubelogs
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Package chart
+        run: helm package ${{ env.CHART_PATH }}
+
+      - name: Push to GHCR
+        run: helm push kubelogs-*.tgz oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts

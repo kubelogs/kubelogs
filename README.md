@@ -27,11 +27,14 @@ kubelogs is a single-binary log aggregator built for solo developers and small p
 ### Helm (recommended)
 
 ```bash
-# Install from the charts directory
-helm install kubelogs ./charts/kubelogs
+# Install from OCI registry (Helm 3.8+)
+helm install kubelogs oci://ghcr.io/kubelogs/charts/kubelogs --version 0.1.0
 
-# Or from OCI registry (coming soon)
-helm install kubelogs oci://ghcr.io/kubelogs/charts/kubelogs
+# Or pull chart locally first
+helm pull oci://ghcr.io/kubelogs/charts/kubelogs --version 0.1.0
+
+# Or install from local charts directory
+helm install kubelogs ./charts/kubelogs
 ```
 
 ### Verify Installation
