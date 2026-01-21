@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	"github.com/kubelogs/kubelogs/internal/storage"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestStore(t *testing.T) {
@@ -323,10 +326,10 @@ func TestDeduplicationDifferentEntries(t *testing.T) {
 	entries := storage.LogBatch{
 		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},
 		{Timestamp: now.Add(time.Nanosecond), Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"}, // different timestamp
-		{Timestamp: now, Namespace: "ns2", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                    // different namespace
-		{Timestamp: now, Namespace: "ns", Pod: "pod2", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                    // different pod
-		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c2", Severity: storage.SeverityInfo, Message: "msg1"},                    // different container
-		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg2"},                     // different message
+		{Timestamp: now, Namespace: "ns2", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                     // different namespace
+		{Timestamp: now, Namespace: "ns", Pod: "pod2", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                     // different pod
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c2", Severity: storage.SeverityInfo, Message: "msg1"},                     // different container
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg2"},                      // different message
 	}
 
 	store.Write(context.Background(), entries)
@@ -357,10 +360,10 @@ func TestDedupHashCollisionResistance(t *testing.T) {
 		{1000, "ns", "pod", "container2", "msg"}, // Different container
 		{1000, "ns", "pod", "container", "msg2"}, // Different message
 		// Test separator collision prevention
-		{1000, "ab", "c", "d", "msg"},  // namespace="ab", pod="c"
-		{1000, "a", "bc", "d", "msg"},  // namespace="a", pod="bc" - should be different hash
-		{1000, "a", "b", "cd", "msg"},  // container="cd"
-		{1000, "a", "b", "c", "dmsg"},  // message="dmsg"
+		{1000, "ab", "c", "d", "msg"}, // namespace="ab", pod="c"
+		{1000, "a", "bc", "d", "msg"}, // namespace="a", pod="bc" - should be different hash
+		{1000, "a", "b", "cd", "msg"}, // container="cd"
+		{1000, "a", "b", "c", "dmsg"}, // message="dmsg"
 	}
 
 	hashes := make(map[int64]int)
@@ -371,4 +374,195 @@ func TestDedupHashCollisionResistance(t *testing.T) {
 		}
 		hashes[h] = i
 	}
+}
+
+func TestMigrationWithDuplicates(t *testing.T) {
+	// This test verifies that the migration correctly handles databases
+	// with duplicate log entries that were created before deduplication was added.
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_migration.db")
+
+	// Step 1: Create a database with the old schema (without dedup index)
+	// and insert duplicate entries manually
+	db, err := openRawDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open raw db: %v", err)
+	}
+
+	// Create minimal schema without the unique index
+	_, err = db.Exec(`
+		CREATE TABLE logs (
+			id          INTEGER PRIMARY KEY,
+			timestamp   INTEGER NOT NULL,
+			namespace   TEXT NOT NULL,
+			pod         TEXT NOT NULL,
+			container   TEXT NOT NULL,
+			severity    INTEGER NOT NULL,
+			message     TEXT NOT NULL,
+			attributes  TEXT,
+			dedup_hash  INTEGER
+		);
+		CREATE INDEX idx_logs_k8s ON logs(namespace, pod, container);
+		CREATE INDEX idx_logs_timestamp ON logs(timestamp DESC);
+		CREATE INDEX idx_logs_severity ON logs(severity);
+		CREATE VIRTUAL TABLE logs_fts USING fts5(message, content='logs', content_rowid='id');
+		CREATE TRIGGER logs_ai AFTER INSERT ON logs BEGIN
+			INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		END;
+		CREATE TRIGGER logs_ad AFTER DELETE ON logs BEGIN
+			INSERT INTO logs_fts(logs_fts, rowid, message) VALUES('delete', old.id, old.message);
+		END;
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	// Insert duplicate entries with the same hash
+	now := time.Now().UnixNano()
+	hash := computeDedupHash(now, "default", "pod-1", "app", "duplicate message")
+
+	// Insert 3 entries with the same hash (simulating duplicates from before dedup was added)
+	for i := 0; i < 3; i++ {
+		_, err = db.Exec(`
+			INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, now, "default", "pod-1", "app", 1, "duplicate message", hash)
+		if err != nil {
+			db.Close()
+			t.Fatalf("Failed to insert duplicate %d: %v", i, err)
+		}
+	}
+
+	// Also insert some unique entries
+	for i := 0; i < 3; i++ {
+		uniqueHash := computeDedupHash(now+int64(i+1), "default", "pod-1", "app", fmt.Sprintf("unique message %d", i))
+		_, err = db.Exec(`
+			INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, now+int64(i+1), "default", "pod-1", "app", 1, fmt.Sprintf("unique message %d", i), uniqueHash)
+		if err != nil {
+			db.Close()
+			t.Fatalf("Failed to insert unique %d: %v", i, err)
+		}
+	}
+
+	db.Close()
+
+	// Step 2: Open the database with our Store, which runs migrations
+	store, err := New(Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Failed to open store (migration should have handled duplicates): %v", err)
+	}
+	defer store.Close()
+
+	// Step 3: Verify that duplicates were removed and only 4 entries remain
+	// (1 from the duplicate set + 3 unique)
+	stats, err := store.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != 4 {
+		t.Errorf("Expected 4 entries after migration, got %d", stats.TotalEntries)
+	}
+
+	// Step 4: Verify the unique index was created
+	hasIndex, err := indexExists(store.db, "logs", "idx_logs_dedup")
+	if err != nil {
+		t.Fatalf("Failed to check index: %v", err)
+	}
+	if !hasIndex {
+		t.Error("Expected idx_logs_dedup index to be created")
+	}
+}
+
+func TestMigrationFreshDatabase(t *testing.T) {
+	// Test that a fresh database gets the unique index created correctly
+	store, err := New(Config{Path: ":memory:"})
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Verify the unique index exists
+	hasIndex, err := indexExists(store.db, "logs", "idx_logs_dedup")
+	if err != nil {
+		t.Fatalf("Failed to check index: %v", err)
+	}
+	if !hasIndex {
+		t.Error("Expected idx_logs_dedup index to be created on fresh database")
+	}
+
+	// Verify deduplication works
+	now := time.Now()
+	entry := storage.LogEntry{
+		Timestamp: now,
+		Namespace: "default",
+		Pod:       "test-pod",
+		Container: "app",
+		Severity:  storage.SeverityInfo,
+		Message:   "test message",
+	}
+
+	// Write same entry twice
+	store.Write(context.Background(), storage.LogBatch{entry})
+	store.Write(context.Background(), storage.LogBatch{entry})
+	store.Flush(context.Background())
+
+	stats, err := store.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != 1 {
+		t.Errorf("Expected 1 entry after dedup, got %d", stats.TotalEntries)
+	}
+}
+
+func TestMigrationExistingDatabaseWithIndex(t *testing.T) {
+	// Test that a database that already has the unique index doesn't fail
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_existing_index.db")
+
+	// Create a database with the store (creates the index)
+	store1, err := New(Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Failed to create initial store: %v", err)
+	}
+
+	// Write some data
+	now := time.Now()
+	store1.Write(context.Background(), storage.LogBatch{
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},
+		{Timestamp: now.Add(time.Second), Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg2"},
+	})
+	store1.Flush(context.Background())
+	store1.Close()
+
+	// Re-open the database - migration should not fail
+	store2, err := New(Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("Failed to re-open store: %v", err)
+	}
+	defer store2.Close()
+
+	// Verify data is intact
+	stats, err := store2.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != 2 {
+		t.Errorf("Expected 2 entries, got %d", stats.TotalEntries)
+	}
+}
+
+// openRawDB opens a SQLite database without running our migrations.
+// Used for testing migration scenarios.
+func openRawDB(path string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	return db, nil
 }

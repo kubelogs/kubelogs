@@ -23,8 +23,10 @@ CREATE INDEX IF NOT EXISTS idx_logs_timestamp
 CREATE INDEX IF NOT EXISTS idx_logs_severity
     ON logs(severity);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup
-    ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL;
+-- Note: The unique index on dedup_hash is created during migration
+-- after ensuring no duplicate hash values exist. This prevents
+-- "UNIQUE constraint failed" errors when opening existing databases
+-- that may have duplicate log entries from before deduplication was added.
 
 CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
     message,

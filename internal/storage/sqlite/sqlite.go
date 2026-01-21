@@ -597,8 +597,23 @@ func runMigrations(db *sql.DB) error {
 		if err := backfillDedupHashes(db); err != nil {
 			return fmt.Errorf("backfill hashes: %w", err)
 		}
+	}
 
-		// Create the unique index after backfill
+	// Check if the unique index exists (handles both new and existing databases)
+	hasIndex, err := indexExists(db, "logs", "idx_logs_dedup")
+	if err != nil {
+		return fmt.Errorf("check index: %w", err)
+	}
+
+	if !hasIndex {
+		// Remove any duplicate hashes before creating the unique index.
+		// This handles databases that had duplicate log entries before
+		// deduplication was implemented.
+		if err := removeDuplicateHashes(db); err != nil {
+			return fmt.Errorf("remove duplicates: %w", err)
+		}
+
+		// Create the unique index after ensuring no duplicates exist
 		if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL`); err != nil {
 			return fmt.Errorf("create dedup index: %w", err)
 		}
@@ -628,6 +643,98 @@ func columnExists(db *sql.DB, table, column string) (bool, error) {
 		}
 	}
 	return false, rows.Err()
+}
+
+// indexExists checks if an index exists on the given table.
+func indexExists(db *sql.DB, table, indexName string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA index_list(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var seq int
+		var name, origin string
+		var unique, partial int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			return false, err
+		}
+		if name == indexName {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// removeDuplicateHashes removes duplicate log entries based on dedup_hash.
+// For each set of duplicates, it keeps the entry with the lowest id (oldest)
+// and deletes the rest. This is necessary before creating a unique index
+// on existing databases that may have duplicate entries.
+func removeDuplicateHashes(db *sql.DB) error {
+	const batchSize = 1000
+
+	for {
+		// Find duplicate hashes (keeping the minimum id for each)
+		rows, err := db.Query(`
+			SELECT dedup_hash, MIN(id) as keep_id
+			FROM logs
+			WHERE dedup_hash IS NOT NULL
+			GROUP BY dedup_hash
+			HAVING COUNT(*) > 1
+			LIMIT ?
+		`, batchSize)
+		if err != nil {
+			return err
+		}
+
+		type dupInfo struct {
+			hash   int64
+			keepID int64
+		}
+		var duplicates []dupInfo
+
+		for rows.Next() {
+			var d dupInfo
+			if err := rows.Scan(&d.hash, &d.keepID); err != nil {
+				rows.Close()
+				return err
+			}
+			duplicates = append(duplicates, d)
+		}
+		rows.Close()
+
+		if len(duplicates) == 0 {
+			break // No more duplicates
+		}
+
+		// Delete duplicates in a transaction
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+
+		stmt, err := tx.Prepare(`DELETE FROM logs WHERE dedup_hash = ? AND id != ?`)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		for _, d := range duplicates {
+			if _, err := stmt.Exec(d.hash, d.keepID); err != nil {
+				stmt.Close()
+				tx.Rollback()
+				return err
+			}
+		}
+
+		stmt.Close()
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // backfillDedupHashes computes and sets dedup_hash for existing rows.
