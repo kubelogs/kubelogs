@@ -595,7 +595,7 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	if !hasColumn {
-		// Add the column
+		// Fresh migration: add column, backfill, create index
 		if _, err := db.Exec(`ALTER TABLE logs ADD COLUMN dedup_hash INTEGER`); err != nil {
 			return fmt.Errorf("add dedup_hash column: %w", err)
 		}
@@ -606,6 +606,28 @@ func runMigrations(db *sql.DB) error {
 		}
 
 		// Create the unique index after backfill
+		if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL`); err != nil {
+			return fmt.Errorf("create dedup index: %w", err)
+		}
+		return nil
+	}
+
+	// Column exists - check if index exists
+	hasIndex, err := indexExists(db, "logs", "idx_logs_dedup")
+	if err != nil {
+		return fmt.Errorf("check index: %w", err)
+	}
+
+	if !hasIndex {
+		// Column exists but index doesn't - need to backfill NULLs and deduplicate
+		// This handles the case where a previous migration partially completed,
+		// or where duplicates were inserted before the unique index was created.
+		if err := backfillDedupHashes(db); err != nil {
+			return fmt.Errorf("backfill hashes: %w", err)
+		}
+		if err := deduplicateHashes(db); err != nil {
+			return fmt.Errorf("deduplicate hashes: %w", err)
+		}
 		if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL`); err != nil {
 			return fmt.Errorf("create dedup index: %w", err)
 		}
@@ -631,6 +653,28 @@ func columnExists(db *sql.DB, table, column string) (bool, error) {
 			return false, err
 		}
 		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// indexExists checks if an index exists on the given table.
+func indexExists(db *sql.DB, table, indexName string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA index_list(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var seq int
+		var name, origin string
+		var unique, partial int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			return false, err
+		}
+		if name == indexName {
 			return true, nil
 		}
 	}
@@ -704,5 +748,35 @@ func backfillDedupHashes(db *sql.DB) error {
 		}
 	}
 
+	return nil
+}
+
+// deduplicateHashes removes duplicate dedup_hash entries, keeping the oldest (smallest id) for each hash.
+// This handles the case where duplicates exist in the database before the unique index was created.
+func deduplicateHashes(db *sql.DB) error {
+	const batchSize = 10000
+
+	for {
+		// Delete duplicates in batches, keeping the row with smallest id for each hash
+		result, err := db.Exec(`
+			DELETE FROM logs WHERE id IN (
+				SELECT l.id FROM logs l
+				WHERE l.dedup_hash IS NOT NULL
+				AND EXISTS (
+					SELECT 1 FROM logs l2
+					WHERE l2.dedup_hash = l.dedup_hash
+					AND l2.id < l.id
+				)
+				LIMIT ?
+			)
+		`, batchSize)
+		if err != nil {
+			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			break
+		}
+	}
 	return nil
 }

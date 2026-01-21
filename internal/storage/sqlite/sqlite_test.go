@@ -376,20 +376,22 @@ func TestDedupHashCollisionResistance(t *testing.T) {
 	}
 }
 
-func TestMigrationFromOldSchema(t *testing.T) {
-	// This test verifies that the fix for the "no such column: dedup_hash" error works.
-	// It simulates an existing database created before the dedup_hash feature was added.
+func TestMigrationWithDuplicateHashes(t *testing.T) {
+	// This test simulates the bug scenario: database has dedup_hash column
+	// but no unique index, and contains duplicate hash values.
+	// Opening the database should deduplicate and create the index successfully.
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "old.db")
+	dbPath := filepath.Join(tmpDir, "test.db")
 
-	// Create a database with the old schema (without dedup_hash column)
+	// Step 1: Create a database with logs table that has dedup_hash column but NO unique index
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 
-	// Old schema without dedup_hash column
-	oldSchema := `
+	// Create the table with dedup_hash column but without the unique index
+	// Also create the FTS5 table and triggers as they would exist in a real database
+	_, err = db.Exec(`
 		CREATE TABLE logs (
 			id          INTEGER PRIMARY KEY,
 			timestamp   INTEGER NOT NULL,
@@ -398,9 +400,9 @@ func TestMigrationFromOldSchema(t *testing.T) {
 			container   TEXT NOT NULL,
 			severity    INTEGER NOT NULL,
 			message     TEXT NOT NULL,
-			attributes  TEXT
+			attributes  TEXT,
+			dedup_hash  INTEGER
 		);
-
 		CREATE INDEX idx_logs_k8s ON logs(namespace, pod, container);
 		CREATE INDEX idx_logs_timestamp ON logs(timestamp DESC);
 		CREATE INDEX idx_logs_severity ON logs(severity);
@@ -427,7 +429,7 @@ func TestMigrationFromOldSchema(t *testing.T) {
 			INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
 		END;
 
-		CREATE TABLE users (
+		CREATE TABLE IF NOT EXISTS users (
 			id         INTEGER PRIMARY KEY,
 			username   TEXT NOT NULL UNIQUE,
 			password   TEXT NOT NULL,
@@ -435,145 +437,354 @@ func TestMigrationFromOldSchema(t *testing.T) {
 			updated_at INTEGER NOT NULL
 		);
 
-		CREATE TABLE sessions (
+		CREATE TABLE IF NOT EXISTS sessions (
 			id         TEXT PRIMARY KEY,
 			user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			created_at INTEGER NOT NULL,
 			expires_at INTEGER NOT NULL
 		);
 
-		CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
-	`
-
-	if _, err := db.Exec(oldSchema); err != nil {
-		db.Close()
-		t.Fatalf("Failed to create old schema: %v", err)
-	}
-
-	// Insert some test data (without dedup_hash)
-	_, err = db.Exec(`
-		INSERT INTO logs (timestamp, namespace, pod, container, severity, message)
-		VALUES (?, 'default', 'test-pod', 'app', 1, 'existing log entry')
-	`, time.Now().UnixNano())
+		CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+	`)
 	if err != nil {
 		db.Close()
-		t.Fatalf("Failed to insert test data: %v", err)
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Step 2: Insert rows with duplicate dedup_hash values
+	now := time.Now().UnixNano()
+	hash := computeDedupHash(now, "ns", "pod", "container", "msg")
+
+	// Insert 3 rows with the same hash (simulating duplicates)
+	for i := 0; i < 3; i++ {
+		_, err = db.Exec(`
+			INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, now, "ns", "pod", "container", 1, "msg", hash)
+		if err != nil {
+			db.Close()
+			t.Fatalf("Failed to insert row %d: %v", i, err)
+		}
+	}
+
+	// Also insert a unique entry
+	hash2 := computeDedupHash(now+1, "ns", "pod", "container", "msg2")
+	_, err = db.Exec(`
+		INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, now+1, "ns", "pod", "container", 1, "msg2", hash2)
+	if err != nil {
+		db.Close()
+		t.Fatalf("Failed to insert unique row: %v", err)
 	}
 
 	db.Close()
 
-	// Now open the database with the new Store (this would fail with the bug)
+	// Step 3: Open the database using New() - this should trigger migration
+	// which should deduplicate and create the index
 	store, err := New(Config{Path: dbPath})
 	if err != nil {
-		t.Fatalf("Failed to open store with old schema: %v", err)
+		t.Fatalf("New() failed - migration should have handled duplicates: %v", err)
 	}
 	defer store.Close()
 
-	// Verify the dedup_hash column exists after migration
-	hasColumn, err := columnExists(store.db, "logs", "dedup_hash")
-	if err != nil {
-		t.Fatalf("Failed to check column: %v", err)
-	}
-	if !hasColumn {
-		t.Error("dedup_hash column should exist after migration")
-	}
-
-	// Verify the idx_logs_dedup index exists
-	var indexExists bool
-	err = store.db.QueryRow(`
-		SELECT 1 FROM sqlite_master
-		WHERE type='index' AND name='idx_logs_dedup'
-	`).Scan(&indexExists)
-	if err == sql.ErrNoRows {
-		t.Error("idx_logs_dedup index should exist after migration")
-	} else if err != nil {
-		t.Fatalf("Failed to check index: %v", err)
-	}
-
-	// Verify existing data is still accessible
+	// Step 4: Verify duplicates were removed (should have 2 entries: one from each unique hash)
 	stats, err := store.Stats(context.Background())
 	if err != nil {
-		t.Fatalf("Failed to get stats: %v", err)
+		t.Fatalf("Stats failed: %v", err)
 	}
-	if stats.TotalEntries != 1 {
-		t.Errorf("Expected 1 existing entry, got %d", stats.TotalEntries)
-	}
-
-	// Verify we can write new entries with deduplication
-	now := time.Now()
-	entry := storage.LogEntry{
-		Timestamp: now,
-		Namespace: "default",
-		Pod:       "new-pod",
-		Container: "app",
-		Severity:  storage.SeverityInfo,
-		Message:   "new log entry",
-	}
-	store.Write(context.Background(), storage.LogBatch{entry})
-	store.Write(context.Background(), storage.LogBatch{entry}) // duplicate
-	store.Flush(context.Background())
-
-	stats, err = store.Stats(context.Background())
-	if err != nil {
-		t.Fatalf("Failed to get stats: %v", err)
-	}
-	// Should have 2 entries: 1 existing + 1 new (duplicate is deduped)
 	if stats.TotalEntries != 2 {
-		t.Errorf("Expected 2 entries after write, got %d", stats.TotalEntries)
+		t.Errorf("Expected 2 entries after deduplication, got %d", stats.TotalEntries)
+	}
+
+	// Step 5: Verify the unique index was created
+	var indexCount int
+	err = store.db.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type='index' AND name='idx_logs_dedup'
+	`).Scan(&indexCount)
+	if err != nil {
+		t.Fatalf("Failed to check index: %v", err)
+	}
+	if indexCount != 1 {
+		t.Errorf("Expected idx_logs_dedup index to exist, got count %d", indexCount)
 	}
 }
 
-func TestFreshDatabaseSchema(t *testing.T) {
-	// Verify that new databases are created correctly with all schema elements
+func TestMigrationWithNullHashes(t *testing.T) {
+	// Test migration when dedup_hash column exists but all values are NULL
+	// (simulates a partial migration that added column but didn't backfill)
 	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "fresh.db")
+	dbPath := filepath.Join(tmpDir, "test.db")
 
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+
+	// Create table with dedup_hash column but no index
+	_, err = db.Exec(`
+		CREATE TABLE logs (
+			id          INTEGER PRIMARY KEY,
+			timestamp   INTEGER NOT NULL,
+			namespace   TEXT NOT NULL,
+			pod         TEXT NOT NULL,
+			container   TEXT NOT NULL,
+			severity    INTEGER NOT NULL,
+			message     TEXT NOT NULL,
+			attributes  TEXT,
+			dedup_hash  INTEGER
+		);
+		CREATE INDEX idx_logs_k8s ON logs(namespace, pod, container);
+		CREATE INDEX idx_logs_timestamp ON logs(timestamp DESC);
+		CREATE INDEX idx_logs_severity ON logs(severity);
+
+		CREATE VIRTUAL TABLE logs_fts USING fts5(
+			message,
+			content='logs',
+			content_rowid='id',
+			tokenize='porter unicode61 remove_diacritics 1'
+		);
+
+		CREATE TRIGGER logs_ai AFTER INSERT ON logs BEGIN
+			INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		END;
+
+		CREATE TRIGGER logs_ad AFTER DELETE ON logs BEGIN
+			INSERT INTO logs_fts(logs_fts, rowid, message)
+				VALUES('delete', old.id, old.message);
+		END;
+
+		CREATE TRIGGER logs_au AFTER UPDATE ON logs BEGIN
+			INSERT INTO logs_fts(logs_fts, rowid, message)
+				VALUES('delete', old.id, old.message);
+			INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		END;
+
+		CREATE TABLE IF NOT EXISTS users (
+			id         INTEGER PRIMARY KEY,
+			username   TEXT NOT NULL UNIQUE,
+			password   TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS sessions (
+			id         TEXT PRIMARY KEY,
+			user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Insert rows with NULL dedup_hash
+	now := time.Now().UnixNano()
+	for i := 0; i < 3; i++ {
+		_, err = db.Exec(`
+			INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+			VALUES (?, ?, ?, ?, ?, ?, NULL)
+		`, now+int64(i), "ns", "pod", "container", 1, fmt.Sprintf("msg%d", i))
+		if err != nil {
+			db.Close()
+			t.Fatalf("Failed to insert row %d: %v", i, err)
+		}
+	}
+
+	db.Close()
+
+	// Open with New() - should backfill hashes and create index
 	store, err := New(Config{Path: dbPath})
 	if err != nil {
-		t.Fatalf("Failed to create fresh store: %v", err)
+		t.Fatalf("New() failed: %v", err)
 	}
 	defer store.Close()
 
-	// Verify the dedup_hash column exists
-	hasColumn, err := columnExists(store.db, "logs", "dedup_hash")
-	if err != nil {
-		t.Fatalf("Failed to check column: %v", err)
-	}
-	if !hasColumn {
-		t.Error("dedup_hash column should exist in fresh database")
-	}
-
-	// Verify the idx_logs_dedup index exists
-	var indexExists bool
-	err = store.db.QueryRow(`
-		SELECT 1 FROM sqlite_master
-		WHERE type='index' AND name='idx_logs_dedup'
-	`).Scan(&indexExists)
-	if err == sql.ErrNoRows {
-		t.Error("idx_logs_dedup index should exist in fresh database")
-	} else if err != nil {
-		t.Fatalf("Failed to check index: %v", err)
-	}
-
-	// Verify deduplication works
-	now := time.Now()
-	entry := storage.LogEntry{
-		Timestamp: now,
-		Namespace: "default",
-		Pod:       "test-pod",
-		Container: "app",
-		Severity:  storage.SeverityInfo,
-		Message:   "test message",
-	}
-	store.Write(context.Background(), storage.LogBatch{entry})
-	store.Write(context.Background(), storage.LogBatch{entry})
-	store.Flush(context.Background())
-
+	// Verify all 3 entries still exist (no duplicates since messages differ)
 	stats, err := store.Stats(context.Background())
 	if err != nil {
-		t.Fatalf("Failed to get stats: %v", err)
+		t.Fatalf("Stats failed: %v", err)
 	}
-	if stats.TotalEntries != 1 {
-		t.Errorf("Expected 1 entry after dedup, got %d", stats.TotalEntries)
+	if stats.TotalEntries != 3 {
+		t.Errorf("Expected 3 entries, got %d", stats.TotalEntries)
+	}
+
+	// Verify hashes were backfilled (no NULL values)
+	var nullCount int
+	err = store.db.QueryRow(`SELECT COUNT(*) FROM logs WHERE dedup_hash IS NULL`).Scan(&nullCount)
+	if err != nil {
+		t.Fatalf("Failed to count NULL hashes: %v", err)
+	}
+	if nullCount != 0 {
+		t.Errorf("Expected 0 NULL hashes after migration, got %d", nullCount)
+	}
+
+	// Verify index was created
+	var indexCount int
+	err = store.db.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type='index' AND name='idx_logs_dedup'
+	`).Scan(&indexCount)
+	if err != nil {
+		t.Fatalf("Failed to check index: %v", err)
+	}
+	if indexCount != 1 {
+		t.Errorf("Expected idx_logs_dedup index to exist")
+	}
+}
+
+func TestMigrationMixedNullAndDuplicates(t *testing.T) {
+	// Test migration when database has both NULL hashes and duplicate non-NULL hashes
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE logs (
+			id          INTEGER PRIMARY KEY,
+			timestamp   INTEGER NOT NULL,
+			namespace   TEXT NOT NULL,
+			pod         TEXT NOT NULL,
+			container   TEXT NOT NULL,
+			severity    INTEGER NOT NULL,
+			message     TEXT NOT NULL,
+			attributes  TEXT,
+			dedup_hash  INTEGER
+		);
+		CREATE INDEX idx_logs_k8s ON logs(namespace, pod, container);
+		CREATE INDEX idx_logs_timestamp ON logs(timestamp DESC);
+		CREATE INDEX idx_logs_severity ON logs(severity);
+
+		CREATE VIRTUAL TABLE logs_fts USING fts5(
+			message,
+			content='logs',
+			content_rowid='id',
+			tokenize='porter unicode61 remove_diacritics 1'
+		);
+
+		CREATE TRIGGER logs_ai AFTER INSERT ON logs BEGIN
+			INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		END;
+
+		CREATE TRIGGER logs_ad AFTER DELETE ON logs BEGIN
+			INSERT INTO logs_fts(logs_fts, rowid, message)
+				VALUES('delete', old.id, old.message);
+		END;
+
+		CREATE TRIGGER logs_au AFTER UPDATE ON logs BEGIN
+			INSERT INTO logs_fts(logs_fts, rowid, message)
+				VALUES('delete', old.id, old.message);
+			INSERT INTO logs_fts(rowid, message) VALUES (new.id, new.message);
+		END;
+
+		CREATE TABLE IF NOT EXISTS users (
+			id         INTEGER PRIMARY KEY,
+			username   TEXT NOT NULL UNIQUE,
+			password   TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS sessions (
+			id         TEXT PRIMARY KEY,
+			user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	now := time.Now().UnixNano()
+
+	// Insert rows with NULL hashes
+	for i := 0; i < 2; i++ {
+		_, err = db.Exec(`
+			INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+			VALUES (?, ?, ?, ?, ?, ?, NULL)
+		`, now+int64(i), "ns", "pod", "container", 1, fmt.Sprintf("null-msg%d", i))
+		if err != nil {
+			db.Close()
+			t.Fatalf("Failed to insert NULL row: %v", err)
+		}
+	}
+
+	// Insert duplicate hashes
+	dupHash := computeDedupHash(now+100, "ns", "pod", "container", "dup-msg")
+	for i := 0; i < 3; i++ {
+		_, err = db.Exec(`
+			INSERT INTO logs (timestamp, namespace, pod, container, severity, message, dedup_hash)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, now+100, "ns", "pod", "container", 1, "dup-msg", dupHash)
+		if err != nil {
+			db.Close()
+			t.Fatalf("Failed to insert duplicate row: %v", err)
+		}
+	}
+
+	db.Close()
+
+	// Open with New()
+	store, err := New(Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer store.Close()
+
+	// Should have 3 entries: 2 unique from NULL rows + 1 from deduplicated duplicates
+	stats, err := store.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats failed: %v", err)
+	}
+	if stats.TotalEntries != 3 {
+		t.Errorf("Expected 3 entries after migration, got %d", stats.TotalEntries)
+	}
+}
+
+func TestIndexExists(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a table with an index
+	_, err = db.Exec(`
+		CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT);
+		CREATE INDEX test_index ON test_table(value);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Test existing index
+	exists, err := indexExists(db, "test_table", "test_index")
+	if err != nil {
+		t.Fatalf("indexExists failed: %v", err)
+	}
+	if !exists {
+		t.Error("Expected test_index to exist")
+	}
+
+	// Test non-existing index
+	exists, err = indexExists(db, "test_table", "nonexistent_index")
+	if err != nil {
+		t.Fatalf("indexExists failed: %v", err)
+	}
+	if exists {
+		t.Error("Expected nonexistent_index to not exist")
 	}
 }

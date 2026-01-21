@@ -24,6 +24,9 @@ CREATE INDEX IF NOT EXISTS idx_logs_timestamp
 CREATE INDEX IF NOT EXISTS idx_logs_severity
     ON logs(severity);
 
+-- Note: idx_logs_dedup unique index is created by runMigrations() to handle
+-- the case where duplicates exist in the database from before the index existed.
+-- This allows the migration to deduplicate rows before creating the unique constraint.
 CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
     message,
     content='logs',
