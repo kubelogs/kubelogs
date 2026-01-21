@@ -1,3 +1,220 @@
+// ANSI escape sequence parser - converts ANSI color codes to HTML spans with Tailwind classes
+function parseAnsi(text) {
+    if (!text) return '';
+
+    // HTML escape function to prevent XSS
+    const escapeHtml = (str) => {
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    };
+
+    // Color mappings to Tailwind CSS classes (optimized for dark theme)
+    const fgColors = {
+        30: 'text-gray-900',    // Black
+        31: 'text-red-400',     // Red
+        32: 'text-green-400',   // Green
+        33: 'text-yellow-400',  // Yellow
+        34: 'text-blue-400',    // Blue
+        35: 'text-purple-400',  // Magenta
+        36: 'text-cyan-400',    // Cyan
+        37: 'text-gray-100',    // White
+        // Bright/high-intensity foreground colors
+        90: 'text-gray-500',    // Bright Black (Gray)
+        91: 'text-red-300',     // Bright Red
+        92: 'text-green-300',   // Bright Green
+        93: 'text-yellow-300',  // Bright Yellow
+        94: 'text-blue-300',    // Bright Blue
+        95: 'text-purple-300',  // Bright Magenta
+        96: 'text-cyan-300',    // Bright Cyan
+        97: 'text-white',       // Bright White
+    };
+
+    const bgColors = {
+        40: 'bg-gray-900',      // Black
+        41: 'bg-red-900',       // Red
+        42: 'bg-green-900',     // Green
+        43: 'bg-yellow-900',    // Yellow
+        44: 'bg-blue-900',      // Blue
+        45: 'bg-purple-900',    // Magenta
+        46: 'bg-cyan-900',      // Cyan
+        47: 'bg-gray-100',      // White
+        // Bright/high-intensity background colors
+        100: 'bg-gray-700',     // Bright Black
+        101: 'bg-red-800',      // Bright Red
+        102: 'bg-green-800',    // Bright Green
+        103: 'bg-yellow-800',   // Bright Yellow
+        104: 'bg-blue-800',     // Bright Blue
+        105: 'bg-purple-800',   // Bright Magenta
+        106: 'bg-cyan-800',     // Bright Cyan
+        107: 'bg-gray-200',     // Bright White
+    };
+
+    // Current style state
+    let currentFg = null;
+    let currentBg = null;
+    let isBold = false;
+    let isDim = false;
+    let isItalic = false;
+    let isUnderline = false;
+
+    // Result accumulator
+    let result = '';
+    let lastIndex = 0;
+
+    // Regex to match ANSI escape sequences (both \x1b and \033 representations)
+    // This handles the common CSI (Control Sequence Introducer) format: ESC [ params m
+    const ansiRegex = /\x1b\[([0-9;]*)m/g;
+
+    let match;
+    while ((match = ansiRegex.exec(text)) !== null) {
+        // Add text before this escape sequence (escaped for safety)
+        if (match.index > lastIndex) {
+            const textSegment = text.substring(lastIndex, match.index);
+            result += wrapWithCurrentStyle(escapeHtml(textSegment));
+        }
+
+        // Parse the escape sequence parameters
+        const params = match[1] ? match[1].split(';').map(p => parseInt(p, 10)) : [0];
+
+        // Process each parameter
+        for (let i = 0; i < params.length; i++) {
+            const code = params[i];
+
+            if (code === 0) {
+                // Reset all styles
+                currentFg = null;
+                currentBg = null;
+                isBold = false;
+                isDim = false;
+                isItalic = false;
+                isUnderline = false;
+            } else if (code === 1) {
+                isBold = true;
+            } else if (code === 2) {
+                isDim = true;
+            } else if (code === 3) {
+                isItalic = true;
+            } else if (code === 4) {
+                isUnderline = true;
+            } else if (code === 22) {
+                // Normal intensity (neither bold nor dim)
+                isBold = false;
+                isDim = false;
+            } else if (code === 23) {
+                isItalic = false;
+            } else if (code === 24) {
+                isUnderline = false;
+            } else if (code === 39) {
+                // Default foreground color
+                currentFg = null;
+            } else if (code === 49) {
+                // Default background color
+                currentBg = null;
+            } else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+                // Standard or bright foreground colors
+                currentFg = fgColors[code] || null;
+            } else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+                // Standard or bright background colors
+                currentBg = bgColors[code] || null;
+            } else if (code === 38 && params[i + 1] === 5) {
+                // 256-color foreground: 38;5;N
+                const colorNum = params[i + 2];
+                currentFg = get256Color(colorNum, 'fg');
+                i += 2; // Skip the next two parameters
+            } else if (code === 48 && params[i + 1] === 5) {
+                // 256-color background: 48;5;N
+                const colorNum = params[i + 2];
+                currentBg = get256Color(colorNum, 'bg');
+                i += 2; // Skip the next two parameters
+            }
+        }
+
+        lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text after the last escape sequence
+    if (lastIndex < text.length) {
+        const textSegment = text.substring(lastIndex);
+        result += wrapWithCurrentStyle(escapeHtml(textSegment));
+    }
+
+    return result;
+
+    // Helper function to wrap text with current style
+    function wrapWithCurrentStyle(text) {
+        if (!text) return '';
+
+        const classes = [];
+        if (currentFg) classes.push(currentFg);
+        if (currentBg) classes.push(currentBg);
+        if (isBold) classes.push('font-bold');
+        if (isDim) classes.push('opacity-60');
+        if (isItalic) classes.push('italic');
+        if (isUnderline) classes.push('underline');
+
+        if (classes.length === 0) {
+            return text;
+        }
+
+        return `<span class="${classes.join(' ')}">${text}</span>`;
+    }
+
+    // Helper function to get Tailwind class for 256-color mode
+    function get256Color(num, type) {
+        if (num === undefined || num === null) return null;
+
+        // Standard colors (0-7)
+        if (num >= 0 && num <= 7) {
+            const standardMap = type === 'fg'
+                ? [fgColors[30], fgColors[31], fgColors[32], fgColors[33], fgColors[34], fgColors[35], fgColors[36], fgColors[37]]
+                : [bgColors[40], bgColors[41], bgColors[42], bgColors[43], bgColors[44], bgColors[45], bgColors[46], bgColors[47]];
+            return standardMap[num];
+        }
+
+        // High-intensity colors (8-15)
+        if (num >= 8 && num <= 15) {
+            const brightMap = type === 'fg'
+                ? [fgColors[90], fgColors[91], fgColors[92], fgColors[93], fgColors[94], fgColors[95], fgColors[96], fgColors[97]]
+                : [bgColors[100], bgColors[101], bgColors[102], bgColors[103], bgColors[104], bgColors[105], bgColors[106], bgColors[107]];
+            return brightMap[num - 8];
+        }
+
+        // 216-color cube (16-231) and grayscale (232-255)
+        // Map to closest Tailwind color approximations
+        if (num >= 16 && num <= 231) {
+            // 6x6x6 color cube
+            const n = num - 16;
+            const r = Math.floor(n / 36);
+            const g = Math.floor((n % 36) / 6);
+            const b = n % 6;
+
+            // Simplified mapping to Tailwind colors based on dominant channel
+            if (r > g && r > b) return type === 'fg' ? 'text-red-400' : 'bg-red-900';
+            if (g > r && g > b) return type === 'fg' ? 'text-green-400' : 'bg-green-900';
+            if (b > r && b > g) return type === 'fg' ? 'text-blue-400' : 'bg-blue-900';
+            if (r === g && r > b) return type === 'fg' ? 'text-yellow-400' : 'bg-yellow-900';
+            if (r === b && r > g) return type === 'fg' ? 'text-purple-400' : 'bg-purple-900';
+            if (g === b && g > r) return type === 'fg' ? 'text-cyan-400' : 'bg-cyan-900';
+            return type === 'fg' ? 'text-gray-400' : 'bg-gray-700';
+        }
+
+        // Grayscale (232-255)
+        if (num >= 232 && num <= 255) {
+            const gray = num - 232; // 0-23
+            if (gray < 6) return type === 'fg' ? 'text-gray-900' : 'bg-gray-900';
+            if (gray < 12) return type === 'fg' ? 'text-gray-600' : 'bg-gray-700';
+            if (gray < 18) return type === 'fg' ? 'text-gray-400' : 'bg-gray-500';
+            return type === 'fg' ? 'text-gray-200' : 'bg-gray-300';
+        }
+
+        return null;
+    }
+}
+
 function app() {
     return {
         entries: [],
@@ -492,6 +709,12 @@ function app() {
             if (s >= 5) return 'bg-red-900/20';   // Error
             if (s >= 4) return 'bg-yellow-900/10'; // Warn
             return '';
+        },
+
+        // Render message with ANSI color support
+        renderMessage(text) {
+            if (!text) return '';
+            return parseAnsi(text);
         },
 
         selectEntry(entry) {
