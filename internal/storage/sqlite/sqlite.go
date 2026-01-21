@@ -85,15 +85,22 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("failed to set journal_mode=DELETE, got %q", journalMode)
 	}
 
-	if _, err := db.Exec(schemaSQL); err != nil {
+	// Create base schema (tables and indexes that don't depend on migrated columns)
+	if _, err := db.Exec(baseSchemaSQL); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("create schema: %w", err)
+		return nil, fmt.Errorf("create base schema: %w", err)
 	}
 
-	// Run migrations for existing databases
+	// Run migrations for existing databases (e.g., add dedup_hash column)
 	if err := runMigrations(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
+	}
+
+	// Create post-migration schema (indexes that depend on migrated columns)
+	if _, err := db.Exec(postMigrationSchemaSQL); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create post-migration schema: %w", err)
 	}
 
 	return &Store{
