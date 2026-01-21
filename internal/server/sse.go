@@ -31,27 +31,34 @@ func (s *HTTPServer) handleLogStream(w http.ResponseWriter, r *http.Request) {
 
 	// Get initial cursor - start from the most recent entries
 	var lastID int64
-	initialResult, err := s.store.Query(r.Context(), storage.Query{
-		Namespace:   filters.namespace,
-		Pod:         filters.pod,
-		Container:   filters.container,
-		MinSeverity: filters.minSeverity,
-		Search:      filters.search,
-		StartTime:   filters.startTime,
-		Attributes:  filters.attributes,
-		Pagination: storage.Pagination{
-			Limit: 50,
-			Order: storage.OrderDesc,
-		},
-	})
-	if err == nil && len(initialResult.Entries) > 0 {
-		// Send initial batch in reverse order (oldest first)
-		for i := len(initialResult.Entries) - 1; i >= 0; i-- {
-			entry := initialResult.Entries[i]
-			s.sendSSEEvent(w, entry)
-			lastID = entry.ID
+
+	// If client provided lastId (reconnection), skip initial batch and resume from that ID
+	if filters.lastId > 0 {
+		lastID = filters.lastId
+	} else {
+		// New connection - fetch and send initial batch
+		initialResult, err := s.store.Query(r.Context(), storage.Query{
+			Namespace:   filters.namespace,
+			Pod:         filters.pod,
+			Container:   filters.container,
+			MinSeverity: filters.minSeverity,
+			Search:      filters.search,
+			StartTime:   filters.startTime,
+			Attributes:  filters.attributes,
+			Pagination: storage.Pagination{
+				Limit: 50,
+				Order: storage.OrderDesc,
+			},
+		})
+		if err == nil && len(initialResult.Entries) > 0 {
+			// Send initial batch in reverse order (oldest first)
+			for i := len(initialResult.Entries) - 1; i >= 0; i-- {
+				entry := initialResult.Entries[i]
+				s.sendSSEEvent(w, entry)
+				lastID = entry.ID
+			}
+			flusher.Flush()
 		}
-		flusher.Flush()
 	}
 
 	// Poll for new entries
@@ -105,6 +112,7 @@ type sseFilters struct {
 	search      string
 	startTime   time.Time
 	attributes  map[string]string
+	lastId      int64 // Resume from this ID (skip initial batch if set)
 }
 
 // parseSSEFilters extracts filter parameters from the request.
@@ -136,6 +144,13 @@ func (s *HTTPServer) parseSSEFilters(r *http.Request) sseFilters {
 		if strings.HasPrefix(key, "attr.") && len(values) > 0 {
 			attrKey := strings.TrimPrefix(key, "attr.")
 			filters.attributes[attrKey] = values[0]
+		}
+	}
+
+	// Parse lastId for reconnection (skip initial batch if set)
+	if v := params.Get("lastId"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			filters.lastId = n
 		}
 	}
 

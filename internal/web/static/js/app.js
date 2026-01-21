@@ -29,6 +29,8 @@ function app() {
         selectedEntry: null,     // Currently selected log entry for detail panel
         detailPanelOpen: false,  // Whether detail panel is visible
         showCopyToast: false,    // Whether to show "Copied" toast
+        lastSeenId: null,        // Track highest seen ID to prevent duplicates on SSE reconnection
+        seenIds: new Set(),      // Set of entry IDs currently in the entries array for fast dedup
 
         init() {
             this.loadFilters();
@@ -139,6 +141,10 @@ function app() {
                     this.oldestLoadedId = this.entries[0].id;
                     this.hasMoreOlder = data.hasMore;
 
+                    // Populate seenIds for deduplication
+                    this.seenIds = new Set(this.entries.map(e => e.id));
+                    this.lastSeenId = this.entries[this.entries.length - 1].id;
+
                     // Scroll to bottom to show newest entries
                     this.$nextTick(() => {
                         const container = this.$refs.logContainer;
@@ -150,6 +156,8 @@ function app() {
                     this.entries = [];
                     this.oldestLoadedId = null;
                     this.hasMoreOlder = false;
+                    this.seenIds = new Set();
+                    this.lastSeenId = null;
                 }
             } catch (err) {
                 console.error('Failed to load historical logs:', err);
@@ -172,6 +180,11 @@ function app() {
             }
             // Note: Live mode doesn't use time filter - streams all new entries
 
+            // If reconnecting, pass lastSeenId to skip initial batch (server-side optimization)
+            if (this.lastSeenId) {
+                params.set('lastId', this.lastSeenId);
+            }
+
             this.eventSource = new EventSource(`/api/logs/stream?${params}`);
 
             this.eventSource.onopen = () => {
@@ -180,7 +193,19 @@ function app() {
 
             this.eventSource.onmessage = (e) => {
                 const entry = JSON.parse(e.data);
+
+                // Deduplicate: skip if we already have this entry (prevents duplicates on SSE reconnection)
+                if (this.seenIds.has(entry.id)) {
+                    return;
+                }
+
                 this.entries.push(entry);
+                this.seenIds.add(entry.id);
+
+                // Track highest seen ID for reconnection optimization
+                if (this.lastSeenId === null || entry.id > this.lastSeenId) {
+                    this.lastSeenId = entry.id;
+                }
 
                 // Track oldest loaded ID for backward pagination
                 if (this.oldestLoadedId === null || entry.id < this.oldestLoadedId) {
@@ -190,6 +215,7 @@ function app() {
                 // Keep max entries in memory (trim oldest when tailing)
                 while (this.entries.length > this.maxEntries) {
                     const removed = this.entries.shift();
+                    this.seenIds.delete(removed.id);
                     // Update oldest ID when removing from front
                     if (this.entries.length > 0) {
                         this.oldestLoadedId = this.entries[0].id;
@@ -233,6 +259,8 @@ function app() {
             this.oldestLoadedId = null;
             this.hasMoreOlder = true;
             this.loadingOlder = false;
+            this.lastSeenId = null;
+            this.seenIds = new Set();
 
             if (this.isLiveMode()) {
                 this.tailing = true;
@@ -247,6 +275,8 @@ function app() {
             this.entries = [];
             this.oldestLoadedId = null;
             this.hasMoreOlder = true;
+            this.lastSeenId = null;
+            this.seenIds = new Set();
         },
 
         async loadOlderEntries() {
@@ -303,16 +333,24 @@ function app() {
                     const prevScrollTop = container.scrollTop;
 
                     // Prepend entries (API returns newest-first, so reverse for chronological order)
-                    const olderEntries = data.entries.reverse();
+                    // Filter out any duplicates that might already be in the entries array
+                    const olderEntries = data.entries.reverse().filter(e => !this.seenIds.has(e.id));
+
+                    // Add new entries to seenIds
+                    olderEntries.forEach(e => this.seenIds.add(e.id));
+
                     this.entries = [...olderEntries, ...this.entries];
 
                     // Update cursor to oldest entry
-                    this.oldestLoadedId = olderEntries[0].id;
+                    if (olderEntries.length > 0) {
+                        this.oldestLoadedId = olderEntries[0].id;
+                    }
                     this.hasMoreOlder = data.hasMore;
 
                     // Trim from end if exceeding maxEntries (remove newest when in historical mode)
                     while (this.entries.length > this.maxEntries) {
-                        this.entries.pop();
+                        const removed = this.entries.pop();
+                        this.seenIds.delete(removed.id);
                     }
 
                     // Restore scroll position after DOM update
