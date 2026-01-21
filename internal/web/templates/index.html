@@ -242,7 +242,7 @@
                         <td class="px-2 py-1 whitespace-nowrap align-top font-semibold"
                             :class="severityClass(entry.severity)"
                             x-text="severityLabel(entry.severity)"></td>
-                        <td class="px-2 py-1 break-all text-gray-200"><span class="whitespace-pre-wrap" x-text="entry.message"></span><template x-if="entry.attrs && Object.keys(entry.attrs).length > 0"><span class="inline-flex flex-wrap gap-1 ml-2 text-xs align-middle"><template x-for="(pair, idx) in Object.entries(entry.attrs)" :key="pair[0]"><span x-show="idx < 3" class="inline-flex bg-gray-700 rounded px-1.5 py-0.5"><span class="text-gray-500" x-text="pair[0] + '='"></span><span class="text-gray-300" x-text="truncateValue(pair[1])"></span></span></template><span x-show="Object.keys(entry.attrs).length > 3" class="text-gray-500 px-1">+<span x-text="Object.keys(entry.attrs).length - 3"></span></span></span></template></td>
+                        <td class="px-2 py-1 break-all text-gray-200"><span class="whitespace-pre-wrap" x-html="renderMessage(entry.message)"></span><template x-if="entry.attrs && Object.keys(entry.attrs).length > 0"><span class="inline-flex flex-wrap gap-1 ml-2 text-xs align-middle"><template x-for="(pair, idx) in Object.entries(entry.attrs)" :key="pair[0]"><span x-show="idx < 3" class="inline-flex bg-gray-700 rounded px-1.5 py-0.5"><span class="text-gray-500" x-text="pair[0] + '='"></span><span class="text-gray-300" x-text="truncateValue(pair[1])"></span></span></template><span x-show="Object.keys(entry.attrs).length > 3" class="text-gray-500 px-1">+<span x-text="Object.keys(entry.attrs).length - 3"></span></span></span></template></td>
                     </tr>
                 </template>
             </tbody>
@@ -373,7 +373,7 @@
                 <dd class="text-gray-200 font-mono text-sm whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-48 overflow-auto cursor-pointer hover:bg-gray-800 transition-colors"
                     @click="copyToClipboard(selectedEntry?.message)"
                     title="Click to copy"
-                    x-text="selectedEntry?.message"></dd>
+                    x-html="renderMessage(selectedEntry?.message)"></dd>
             </div>
 
             <!-- Attributes -->

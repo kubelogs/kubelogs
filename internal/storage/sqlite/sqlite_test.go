@@ -326,10 +326,10 @@ func TestDeduplicationDifferentEntries(t *testing.T) {
 	entries := storage.LogBatch{
 		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},
 		{Timestamp: now.Add(time.Nanosecond), Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"}, // different timestamp
-		{Timestamp: now, Namespace: "ns2", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                    // different namespace
-		{Timestamp: now, Namespace: "ns", Pod: "pod2", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                    // different pod
-		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c2", Severity: storage.SeverityInfo, Message: "msg1"},                    // different container
-		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg2"},                     // different message
+		{Timestamp: now, Namespace: "ns2", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                     // different namespace
+		{Timestamp: now, Namespace: "ns", Pod: "pod2", Container: "c", Severity: storage.SeverityInfo, Message: "msg1"},                     // different pod
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c2", Severity: storage.SeverityInfo, Message: "msg1"},                     // different container
+		{Timestamp: now, Namespace: "ns", Pod: "pod", Container: "c", Severity: storage.SeverityInfo, Message: "msg2"},                      // different message
 	}
 
 	store.Write(context.Background(), entries)
@@ -360,10 +360,10 @@ func TestDedupHashCollisionResistance(t *testing.T) {
 		{1000, "ns", "pod", "container2", "msg"}, // Different container
 		{1000, "ns", "pod", "container", "msg2"}, // Different message
 		// Test separator collision prevention
-		{1000, "ab", "c", "d", "msg"},  // namespace="ab", pod="c"
-		{1000, "a", "bc", "d", "msg"},  // namespace="a", pod="bc" - should be different hash
-		{1000, "a", "b", "cd", "msg"},  // container="cd"
-		{1000, "a", "b", "c", "dmsg"},  // message="dmsg"
+		{1000, "ab", "c", "d", "msg"}, // namespace="ab", pod="c"
+		{1000, "a", "bc", "d", "msg"}, // namespace="a", pod="bc" - should be different hash
+		{1000, "a", "b", "cd", "msg"}, // container="cd"
+		{1000, "a", "b", "c", "dmsg"}, // message="dmsg"
 	}
 
 	hashes := make(map[int64]int)
