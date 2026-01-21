@@ -1,7 +1,8 @@
 package sqlite
 
-// schemaSQL contains the DDL for creating the logs table and FTS5 index.
-const schemaSQL = `
+// baseSchemaSQL contains the DDL for creating tables and indexes that don't
+// depend on columns added by migrations. This is executed BEFORE migrations run.
+const baseSchemaSQL = `
 CREATE TABLE IF NOT EXISTS logs (
     id          INTEGER PRIMARY KEY,
     timestamp   INTEGER NOT NULL,
@@ -67,6 +68,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+`
+
+// postMigrationSchemaSQL contains indexes that depend on columns which may be
+// added by migrations. This is executed AFTER migrations run to ensure the
+// columns exist (either from base schema for new DBs, or from migrations for old DBs).
+const postMigrationSchemaSQL = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_dedup
+    ON logs(dedup_hash) WHERE dedup_hash IS NOT NULL;
 `
 
 // pragmaSQL contains performance-critical SQLite settings.
